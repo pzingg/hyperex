@@ -13,6 +13,7 @@ defmodule Hyperex.ScriptTest do
 
     result =
       if r.result == :ok && r.rest != [] do
+        IO.puts("partial '#{r.rest}'")
         :partial
       else
         r.result
@@ -87,7 +88,93 @@ defmodule Hyperex.ScriptTest do
     end
   end
 
-  describe "scriptlet" do
+  describe "scriptlet global" do
+    test "parses global statement", %{peg: peg} do
+      run(peg, "global a, b", :ok, scriptlet: [global: ["a", "b"]])
+    end
+  end
+
+  describe "scriptlet return" do
+    test "parses empty return statement", %{peg: peg} do
+      run(peg, "return", :ok, scriptlet: [return: []])
+    end
+
+    test "parses return statement", %{peg: peg} do
+      run(peg, "return 42", :ok, scriptlet: [return: [integer: 42]])
+    end
+
+    test "parses return statement with another statement", %{peg: peg} do
+      run(peg, "return 43\nglobal d", :ok, scriptlet: [return: [integer: 43], global: ["d"]])
+    end
+  end
+
+  describe "scriptlet pass" do
+    test "parses pass statement", %{peg: peg} do
+      run(peg, "pass test10", :ok, scriptlet: [pass: "test10"])
+    end
+  end
+
+  describe "scriptlet exit" do
+    test "parses exit statement", %{peg: peg} do
+      run(peg, "exit test11", :ok, scriptlet: [exit_handler: "test11"])
+    end
+
+    test "parses exit repeat statement", %{peg: peg} do
+      run(peg, "exit repeat", :ok, scriptlet: [:exit_repeat])
+    end
+  end
+
+  describe "scriptlet if" do
+    test "parses single line if statement", %{peg: peg} do
+      run(peg, "if true then 1", :ok, scriptlet: [])
+    end
+
+    test "parses multiple line if statement", %{peg: peg} do
+      script = """
+      if true then
+        1
+        2
+      end if
+      """
+      run(peg, script, :ok, scriptlet: [])
+    end
+
+    test "parses single line if-then-else statement", %{peg: peg} do
+      run(peg, "if true then \"Monday\" else \"Tuesday\"", :ok, scriptlet: [])
+    end
+
+    test "parses multiline if-then-else statement", %{peg: peg} do
+      script = """
+      if true then
+        "hi"
+      else
+        "bye"
+      end if
+      """
+      run(peg, script, :ok, scriptlet: [])
+    end
+
+  end
+
+  describe "scriptlet message" do
+    test "empty message statement", %{peg: peg} do
+      run(peg, "test20", :ok, scriptlet: [{:message, "test20", []}])
+    end
+
+    test "message statement", %{peg: peg} do
+      run(peg, "searchScript \"WildCard\", \"Help\"", :ok,
+        scriptlet: [{:message, "searchScript", [string_lit: "WildCard", string_lit: "Help"]}]
+      )
+    end
+
+    test "message statement with another statement", %{peg: peg} do
+      run(peg, "test21 2, b\nexit to HyperCard", :ok,
+        scriptlet: [{:message, "test21", [integer: 2, var: "b"]}, :exit_to_hypercard]
+      )
+    end
+  end
+
+  describe "scriptlet exprs" do
     test "parses single statement", %{peg: peg} do
       run(peg, "3", :ok, scriptlet: [integer: 3])
     end
