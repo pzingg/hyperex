@@ -1,0 +1,3 @@
+%{
+  "xpeg": {:hex, :xpeg, "0.10.0", "1cfece5d39c422626e098f9fac99ad82dc29c3d794d54a3201c713f3ca6e7f55", [:mix], [], "hexpm", "ed83bf4b5ff654e29882641145fe6669df65154c1798a35fbae367b0d0e69fbb"},
+}
