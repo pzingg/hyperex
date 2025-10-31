@@ -193,6 +193,24 @@ defmodule Hyperex.ScriptTest do
     end
   end
 
+  describe "scriplet property" do
+    test "global", %{peg: peg} do
+      run(peg, "the address", :ok, scriptlet: [{:global_property, "address", []}])
+    end
+
+    test "long version", %{peg: peg} do
+      run(peg, "the long version", :ok, scriptlet: [{:global_property, "version", [format: :long]}])
+    end
+
+    test "object", %{peg: peg} do
+      run(peg, "the rect of fieldVar", :ok, scriptlet: [{:object_property, "rect", {:var, "fieldVar"}, []}])
+    end
+
+    test "english name", %{peg: peg} do
+      run(peg, "the english name of fieldVar", :ok, scriptlet: [{:object_property, "name", {:var, "fieldVar"}, [format: :english]}])
+    end
+  end
+
   describe "scriplet function call" do
     test "the target", %{peg: peg} do
       run(peg, "the target", :ok, scriptlet: [{:function_call, "the_target", [], []}])
