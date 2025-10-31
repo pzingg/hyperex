@@ -94,12 +94,13 @@ defmodule Hyperex.Test.SubGrammars do
                 end)
 
   @peg_id (peg(:program) do
-             # Basics
              Whitespace <- " " | "\t"
              Comment <- "--" * star(1 - "\n")
              # Token delimeter
              :+ <- star(Whitespace) * opt(Comment)
 
+             # Basics
+             Nl <- "\n"
              AlphaLower <- {~c"a"..~c"z"}
              Alpha <- {~c"A"..~c"Z"} | AlphaLower
              Digit <- {~c"0"..~c"9"}
@@ -119,10 +120,139 @@ defmodule Hyperex.Test.SubGrammars do
                | "return"
                | "send"
                | "then"
+               # add all the others!
+               | :date_time_func_name
+               | :zero_arg_func_name
+               | :single_arg_func_name
+               | :two_arg_func_name
+               | :list_arg_func_name
+               | "is"
+               | "not"
+               | "an"
+               | "a"
+               | "there"
+               | "true"
+               | "false"
 
              NonReserved <- Reserved * +(Alpha | Digit)
-
              :id <- NonReserved | Word - Reserved
+
+             :date_time_func_name <- "date" | "time"
+
+             :zero_arg_func_name <-
+               "clickChunk"
+               | "clickchunk"
+               | "clickH"
+               | "clickh"
+               | "clickLine"
+               | "clickline"
+               | "clickLoc"
+               | "clickloc"
+               | "clickText"
+               | "clicktext"
+               | "clickV"
+               | "clickv"
+               | "commandKey"
+               | "commandkey"
+               | "cmdKey"
+               | "cmdkey"
+               | "date"
+               | "destination"
+               | "diskSpace"
+               | "diskspace"
+               | "foundChunk"
+               | "foundchunk"
+               | "foundField"
+               | "foundfield"
+               | "foundLine"
+               | "foundline"
+               | "foundText"
+               | "foundtext"
+               | "heapSpace"
+               | "heapspace"
+               | "menus"
+               | "mouseClick"
+               | "mouseclick"
+               | "mouseH"
+               | "mouseh"
+               | "mouseLoc"
+               | "mouseloc"
+               | "mouseV"
+               | "mousev"
+               | "mouse"
+               | "number"
+               | "optionKey"
+               | "optionkey"
+               | "paramCount"
+               | "paramcount"
+               | "params"
+               | "programs"
+               | "result"
+               | "screenRect"
+               | "screenrect"
+               | "seconds"
+               | "secs"
+               | "selectedChunk"
+               | "selectedchunk"
+               | "selectedField"
+               | "selectedfield"
+               | "selectedLoc"
+               | "selectedloc"
+               | "shiftKey"
+               | "shiftkey"
+               | "sound"
+               | "stackSpace"
+               | "stackspace"
+               | "stacks"
+               | "systemVersion"
+               | "systemversion"
+               | "ticks"
+               | "time"
+               | "tool"
+               | "voices"
+               | "windows"
+
+             :single_arg_func_name <-
+               "abs"
+               | "atan"
+               | "charToNum"
+               | "chartonum"
+               | "cos"
+               | "exp1"
+               | "exp2"
+               | "exp"
+               | "length"
+               | "ln1"
+               | "ln"
+               | "log2"
+               | "numToChar"
+               | "numtochar"
+               | "param"
+               | "random"
+               | "round"
+               | "selectedButton"
+               | "selectedbutton"
+               | "selectedLine"
+               | "selectedline"
+               | "selectedText"
+               | "selectedtext"
+               | "sin"
+               | "sqrt"
+               | "tan"
+               | "trunc"
+               | "value"
+
+             :two_arg_func_name <-
+               "annuity"
+               | "compound"
+               | "offset"
+
+             :list_arg_func_name <-
+               "average"
+               | "min"
+               | "max"
+               | "sum"
+
              :program <- :+ * :id * :+
            end)
 

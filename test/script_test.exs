@@ -23,16 +23,26 @@ defmodule Hyperex.ScriptTest do
     assert(r.captures == exp_captures)
   end
 
-  describe "script" do
-    test "parses empty single handler", %{peg: peg} do
+  describe "syntax errors" do
+    test "reserved word", %{peg: peg} do
+      run(peg, "then", :error)
+    end
+
+    test "empty script", %{peg: peg} do
+      run(peg, "", :error)
+    end
+  end
+
+  describe "parses script" do
+    test "message handler", %{peg: peg} do
       run(peg, "on test1\nend test1", :ok, script: [{:handler, "test1", [], []}])
     end
 
-    test "parses empty handler with params", %{peg: peg} do
+    test "message handler with params", %{peg: peg} do
       run(peg, "on test2 a\nend test2", :ok, script: [{:handler, "test2", ["a"], []}])
     end
 
-    test "parses two empty handlers", %{peg: peg} do
+    test "two message handlers", %{peg: peg} do
       run(peg, "on test3\nend test3\non test4 a, b\nend test4", :ok,
         script: [
           {:handler, "test3", [], []},
@@ -41,21 +51,21 @@ defmodule Hyperex.ScriptTest do
       )
     end
 
-    test "parses single handler with single statement", %{peg: peg} do
+    test "single message handler with single statement", %{peg: peg} do
       run(peg, "on test5\n1\nend test5", :ok, script: [{:handler, "test5", [], [integer: 1]}])
     end
 
-    test "parses single handler with multiple statements", %{peg: peg} do
+    test "single message handler with multiple statements", %{peg: peg} do
       run(peg, "on test6\n1\n2\nend test6", :ok,
         script: [{:handler, "test6", [], [integer: 1, integer: 2]}]
       )
     end
 
-    test "parses empty function def with no parameters", %{peg: peg} do
+    test "empty function def with no params", %{peg: peg} do
       run(peg, "function test7\nend test7", :ok, script: [{:function, "test7", [], []}])
     end
 
-    test "parses a real script", %{peg: peg} do
+    test "message handler and function def", %{peg: peg} do
       script = """
       on test8 a, b
         1
@@ -78,72 +88,65 @@ defmodule Hyperex.ScriptTest do
     end
   end
 
-  describe "errors" do
-    test "fails reserved", %{peg: peg} do
-      run(peg, "then", :error)
-    end
-
-    test "parses empty script", %{peg: peg} do
-      run(peg, "", :error)
-    end
-  end
-
   describe "scriptlet global" do
-    test "parses global statement", %{peg: peg} do
+    test "with multiple names", %{peg: peg} do
       run(peg, "global a, b", :ok, scriptlet: [global: ["a", "b"]])
     end
   end
 
   describe "scriptlet return" do
-    test "parses empty return statement", %{peg: peg} do
+    test "with no params", %{peg: peg} do
       run(peg, "return", :ok, scriptlet: [return: []])
     end
 
-    test "parses return statement", %{peg: peg} do
+    test "with params", %{peg: peg} do
       run(peg, "return 42", :ok, scriptlet: [return: [integer: 42]])
     end
 
-    test "parses return statement with another statement", %{peg: peg} do
+    test "followed by another statement", %{peg: peg} do
       run(peg, "return 43\nglobal d", :ok, scriptlet: [return: [integer: 43], global: ["d"]])
     end
   end
 
   describe "scriptlet pass" do
-    test "parses pass statement", %{peg: peg} do
+    test "handler", %{peg: peg} do
       run(peg, "pass test10", :ok, scriptlet: [pass: "test10"])
     end
   end
 
   describe "scriptlet exit" do
-    test "parses exit statement", %{peg: peg} do
+    test "handler", %{peg: peg} do
       run(peg, "exit test11", :ok, scriptlet: [exit_handler: "test11"])
     end
 
-    test "parses exit repeat statement", %{peg: peg} do
+    test "repeat", %{peg: peg} do
       run(peg, "exit repeat", :ok, scriptlet: [:exit_repeat])
     end
   end
 
   describe "scriptlet if" do
-    test "parses single line if statement", %{peg: peg} do
-      run(peg, "if true then 1", :ok, scriptlet: [])
+    test "single line", %{peg: peg} do
+      run(peg, "if true then 1", :ok, scriptlet: [{:if, {:constant, "true"}, [integer: 1], []}])
     end
 
-    test "parses multiple line if statement", %{peg: peg} do
+    test "multiple line", %{peg: peg} do
       script = """
       if true then
         1
         2
       end if
       """
-      run(peg, script, :ok, scriptlet: [])
+
+      run(peg, script, :ok, scriptlet: [{:if, {:constant, "true"}, [integer: 1, integer: 2], []}])
     end
 
-    test "parses single line if-then-else statement", %{peg: peg} do
-      run(peg, "if true then \"Monday\" else \"Tuesday\"", :ok, scriptlet: [])
+    test "single line if-then-else", %{peg: peg} do
+      run(peg, "if true then \"Monday\" else \"Tuesday\"", :ok,
+        scriptlet: [{:if, {:constant, "true"}, [string_lit: "Monday"], [string_lit: "Tuesday"]}]
+      )
     end
 
-    test "parses multiline if-then-else statement", %{peg: peg} do
+    test "multiple line if-then-else", %{peg: peg} do
       script = """
       if true then
         "hi"
@@ -151,23 +154,77 @@ defmodule Hyperex.ScriptTest do
         "bye"
       end if
       """
-      run(peg, script, :ok, scriptlet: [])
+
+      run(peg, script, :ok,
+        scriptlet: [{:if, {:constant, "true"}, [string_lit: "hi"], [string_lit: "bye"]}]
+      )
+    end
+  end
+
+  describe "scriptlet repeat" do
+    test "while", %{peg: peg} do
+      run(peg, "repeat while true\n1\n2\nend repeat", :ok,
+        scriptlet: [{:repeat_while, [integer: 1, integer: 2], {:constant, "true"}}]
+      )
     end
 
+    test "until", %{peg: peg} do
+      run(peg, "repeat until true\n1\n2\nend repeat", :ok,
+        scriptlet: [{:repeat_until, [integer: 1, integer: 2], {:constant, "true"}}]
+      )
+    end
+
+    test "forever", %{peg: peg} do
+      run(peg, "repeat forever\n1\n2\nend repeat", :ok,
+        scriptlet: [{:repeat_forever, [integer: 1, integer: 2]}]
+      )
+    end
+
+    test "for", %{peg: peg} do
+      run(peg, "repeat for 3 times\n1\n2\nend repeat", :ok,
+        scriptlet: [{:repeat_count, [integer: 1, integer: 2], {:integer, 3}}]
+      )
+    end
+  end
+
+  describe "scriplet function call" do
+    test "the target", %{peg: peg} do
+      run(peg, "the target", :ok, scriptlet: [{:function_call, "the_target", [], []}])
+    end
+
+    test "the long target", %{peg: peg} do
+      run(peg, "the long target", :ok,
+        scriptlet: [{:function_call, "the_target", [], [format: :long]}]
+      )
+    end
+
+    test "the abs", %{peg: peg} do
+      run(peg, "the abs of 1", :ok, scriptlet: [{:function_call, "abs", [integer: 1], []}])
+    end
+
+    test "abs", %{peg: peg} do
+      run(peg, "abs(1)", :ok, scriptlet: [{:function_call, "abs", [integer: 1], []}])
+    end
+
+    test "average", %{peg: peg} do
+      run(peg, "average(1, 2)", :ok,
+        scriptlet: [{:function_call, "average", [integer: 1, integer: 2], []}]
+      )
+    end
   end
 
   describe "scriptlet message" do
-    test "empty message statement", %{peg: peg} do
+    test "without params", %{peg: peg} do
       run(peg, "test20", :ok, scriptlet: [{:message, "test20", []}])
     end
 
-    test "message statement", %{peg: peg} do
+    test "with params", %{peg: peg} do
       run(peg, "searchScript \"WildCard\", \"Help\"", :ok,
         scriptlet: [{:message, "searchScript", [string_lit: "WildCard", string_lit: "Help"]}]
       )
     end
 
-    test "message statement with another statement", %{peg: peg} do
+    test "followed by another statement", %{peg: peg} do
       run(peg, "test21 2, b\nexit to HyperCard", :ok,
         scriptlet: [{:message, "test21", [integer: 2, var: "b"]}, :exit_to_hypercard]
       )

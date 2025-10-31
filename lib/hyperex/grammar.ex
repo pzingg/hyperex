@@ -31,9 +31,16 @@ defmodule Hyperex.Grammar do
                    | "send"
                    | "then"
                    # add all the others!
+                   | :date_time_func_name
+                   | :zero_arg_func_name
+                   | :single_arg_func_name
+                   | :two_arg_func_name
+                   | :list_arg_func_name
+                   | "is"
                    | "not"
-                   | "true"
                    | "there"
+                   | "true"
+                   | "false"
 
                  NonReserved <- Reserved * +(Alpha | Digit)
                  :id <- NonReserved | Word - Reserved
@@ -64,10 +71,10 @@ defmodule Hyperex.Grammar do
                      | "return"
                      | "space"
                      | "tab"
-                     | "formfeed"
                      | "formFeed"
-                     | "linefeed"
+                     | "formfeed"
                      | "lineFeed"
+                     | "linefeed"
                      | "comma"
                      | "colon"
                    ) * fn [v | cs] -> [{:constant, String.downcase(v)} | cs] end
@@ -75,11 +82,13 @@ defmodule Hyperex.Grammar do
                  :float <-
                    float(
                      opt("-") *
-                       ("." * +Digit | +Digit * "." * star(Digit)) *
+                       (opt("0") * "." * +Digit | +Digit * "." * star(Digit)) *
                        opt(("e" | "E") * opt("-" | "+") * +Digit)
                    ) * fn [v | cs] -> [{:float, v} | cs] end
 
-                 :integer <- int(opt("-") * +Digit) * fn [v | cs] -> [{:integer, v} | cs] end
+                 :integer <-
+                   int("0" | opt("-") * {~c"1"..~c"9"} * star(Digit)) *
+                     fn [v | cs] -> [{:integer, v} | cs] end
 
                  :single_quoted <-
                    str(star("'" * "'" | 1 - "'")) *
@@ -249,31 +258,26 @@ defmodule Hyperex.Grammar do
                        end
                      end
 
-                 #       | exit_statement
-                 #       | pass_statement
-                 #       | if_statement
-                 #       | repeat_statement
-                 #       | command_statement
-                 #       | function_call
-                 #       | message_statement
-
                  :parameter_list <-
                    :param * :+ * star("," * :+ * :param) *
                      fn cs ->
                        {params, rest} =
-                         Enum.split_while(cs, fn c -> is_tuple(c) && elem(c, 0) == :param end)
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
+                           cs,
+                           [in: :param, reverse: true, extract: true]
+                         ])
 
-                       [
-                         {:params, params |> Enum.map(fn c -> elem(c, 1) end) |> Enum.reverse()}
-                         | rest
-                       ]
+                       [{:params, params} | rest]
                      end
 
                  :global <-
                    "global" * :+ * :parameter_list *
                      fn cs ->
                        {params, rest} =
-                         Enum.split_with(cs, fn c -> is_tuple(c) && elem(c, 0) == :params end)
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
+                           cs,
+                           [in: :params]
+                         ])
 
                        case params do
                          [{:params, params}] -> [{:global, params} | rest]
@@ -309,52 +313,339 @@ defmodule Hyperex.Grammar do
                  :else <- "else" * :+ * (:else_single | :else_multi)
 
                  :then_multiline <-
-                   +:Nl * :+ * :statement_list * :+ * star(:Nl) * :+ * (:else | :end_if) *
-                     fn cs ->
-                       IO.puts("then #{inspect(cs)}")
-                       cs
-                     end
+                   +:Nl * :+ * :statement_list * :+ * star(:Nl) * :+ * (:else | :end_if)
 
                  :then_single_line <- :statement * :+ * opt(:Nl) * :+ * opt(:else)
                  :then <- "then" * :+ * (:then_multiline | :then_single_line)
 
                  :if <-
-                   "if" * :+ * :expr * :+ * opt(:Nl) * :+ * :then * fn cs ->
-                    {stmnts, [test | rest]} = Enum.split_while(cs, fn c -> is_tuple(c) && elem(c, 0) in [:statement, :statements] end)
-                    case stmnts do
-                      [{:statement, if_path}] -> [{:if, test, [if_path], []} | rest]
-                      [{:statements, if_path}] -> [{:if, test, if_path, []} | rest]
-                      [{:statement, else_path}, {:statement, if_path}] -> [{:if, test, [if_path], [else_path]} | rest]
-                      [{:statements, else_path}, {:statements, if_path}] -> [{:if, test, if_path, else_path} | rest]
-                    end
-                  end
+                   "if" * :+ * :expr * :+ * opt(:Nl) * :+ * :then *
+                     fn cs ->
+                       {stmnts, [test | rest]} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
+                           cs,
+                           [in: [:statement, :statements]]
+                         ])
+
+                       case stmnts do
+                         [{:statement, if_path}] ->
+                           [{:if, test, [if_path], []} | rest]
+
+                         [{:statements, if_path}] ->
+                           [{:if, test, if_path, []} | rest]
+
+                         [{:statement, else_path}, {:statement, if_path}] ->
+                           [{:if, test, [if_path], [else_path]} | rest]
+
+                         [{:statements, else_path}, {:statements, if_path}] ->
+                           [{:if, test, if_path, else_path} | rest]
+                       end
+                     end
+
+                 :repeat_until <-
+                   "until" * :+ * :expr * fn [ex | cs] -> [{:repeat_until, [], ex} | cs] end
+
+                 :repeat_while <-
+                   "while" * :+ * :expr * fn [ex | cs] -> [{:repeat_while, [], ex} | cs] end
+
+                 :repeat_with_desc <-
+                   str(:id) * :+ * "=" * :+ * :expr * :+ * "down" * :+ * "to" * :+ * :expr *
+                     fn [to, from, var | cs] -> [{:repeat_with_desc, [], var, from, to} | cs] end
+
+                 :repeat_with_asc <-
+                   str(:id) * :+ * "=" * :+ * :expr * :+ * "to" * :+ * :expr *
+                     fn [to, from, var | cs] -> [{:repeat_with_asc, [], var, from, to} | cs] end
+
+                 :repeat_with <- "with" * :+ * (:repeat_with_desc | :repeat_with_asc)
+
+                 :repeat_forever <- "forever" * fn cs -> [{:repeat_forever, []} | cs] end
+
+                 :repeat_count <-
+                   opt("for") * :+ * :expr * :+ * opt("times") *
+                     fn [ex | cs] -> [{:repeat_count, [], ex} | cs] end
+
+                 :repeat_range <-
+                   :repeat_until
+                   | :repeat_while
+                   | :repeat_with
+                   | :repeat_forever
+                   | :repeat_count
+
+                 :repeat <-
+                   "repeat" * :+ * :repeat_range * :+ * +Nl * :+ * :statement_list * :+ *
+                     "end" * :+ * "repeat" *
+                     fn [{:statements, stmnts}, rep | cs] ->
+                       rep =
+                         case rep do
+                           {:repeat_until, _, ex} ->
+                             {:repeat_until, stmnts, ex}
+
+                           {:repeat_while, _, ex} ->
+                             {:repeat_while, stmnts, ex}
+
+                           {:repeat_with_desc, _, var, from, to} ->
+                             {:repeat_with_desc, stmnts, var, from, to}
+
+                           {:repeat_with_asc, _, var, from, to} ->
+                             {:repeat_with_asc, stmnts, var, from, to}
+
+                           {:repeat_forever, _} ->
+                             {:repeat_forever, stmnts}
+
+                           {:repeat_count, _, ex} ->
+                             {:repeat_count, stmnts, ex}
+                         end
+
+                       [rep | cs]
+                     end
+
+                 :adjective <-
+                   str("abbreviated" | "abbrev" | "abbr" | "long" | "short") *
+                     fn [v | cs] ->
+                       format =
+                         case v do
+                           "long" -> {:format, :long}
+                           "short" -> {:format, :short}
+                           _ -> {:format, :abbrev}
+                         end
+
+                       [format | cs]
+                     end
+
+                 :date_time_func_name <- "date" | "time"
+
+                 :zero_arg_func_name <-
+                   "clickChunk"
+                   | "clickchunk"
+                   | "clickH"
+                   | "clickh"
+                   | "clickLine"
+                   | "clickline"
+                   | "clickLoc"
+                   | "clickloc"
+                   | "clickText"
+                   | "clicktext"
+                   | "clickV"
+                   | "clickv"
+                   | "commandKey"
+                   | "commandkey"
+                   | "cmdKey"
+                   | "cmdkey"
+                   | "date"
+                   | "destination"
+                   | "diskSpace"
+                   | "diskspace"
+                   | "foundChunk"
+                   | "foundchunk"
+                   | "foundField"
+                   | "foundfield"
+                   | "foundLine"
+                   | "foundline"
+                   | "foundText"
+                   | "foundtext"
+                   | "heapSpace"
+                   | "heapspace"
+                   | "menus"
+                   | "mouseClick"
+                   | "mouseclick"
+                   | "mouseH"
+                   | "mouseh"
+                   | "mouseLoc"
+                   | "mouseloc"
+                   | "mouseV"
+                   | "mousev"
+                   | "mouse"
+                   | "number"
+                   | "optionKey"
+                   | "optionkey"
+                   | "paramCount"
+                   | "paramcount"
+                   | "params"
+                   | "programs"
+                   | "result"
+                   | "screenRect"
+                   | "screenrect"
+                   | "seconds"
+                   | "secs"
+                   | "selectedChunk"
+                   | "selectedchunk"
+                   | "selectedField"
+                   | "selectedfield"
+                   | "selectedLoc"
+                   | "selectedloc"
+                   | "shiftKey"
+                   | "shiftkey"
+                   | "sound"
+                   | "stackSpace"
+                   | "stackspace"
+                   | "stacks"
+                   | "systemVersion"
+                   | "systemversion"
+                   | "ticks"
+                   | "time"
+                   | "tool"
+                   | "voices"
+                   | "windows"
+
+                 :single_arg_func_name <-
+                   "abs"
+                   | "atan"
+                   | "charToNum"
+                   | "chartonum"
+                   | "cos"
+                   | "exp1"
+                   | "exp2"
+                   | "exp"
+                   | "length"
+                   | "ln1"
+                   | "ln"
+                   | "log2"
+                   | "numToChar"
+                   | "numtochar"
+                   | "param"
+                   | "random"
+                   | "round"
+                   | "selectedButton"
+                   | "selectedbutton"
+                   | "selectedLine"
+                   | "selectedline"
+                   | "selectedText"
+                   | "selectedtext"
+                   | "sin"
+                   | "sqrt"
+                   | "tan"
+                   | "trunc"
+                   | "value"
+
+                 :two_arg_func_name <-
+                   "annuity"
+                   | "compound"
+                   | "offset"
+
+                 :list_arg_func_name <-
+                   "average"
+                   | "min"
+                   | "max"
+                   | "sum"
+
+                 :the_formatted_func <-
+                   "the" * :+ * opt(:adjective) * :+ * str(:date_time_func_name | "target") *
+                     fn [name | cs] ->
+                       name =
+                         if name == "target" do
+                           "the_target"
+                         else
+                           name
+                         end
+
+                       case cs do
+                         [{:format, _} = format | rest] ->
+                           [{:function_call, name, [], [format]} | rest]
+
+                         _ ->
+                           [{:function_call, name, [], []} | cs]
+                       end
+                     end
+
+                 :target_func <- "target" * fn cs -> [{:function_call, "target", [], []} | cs] end
+
+                 :number_func <-
+                   opt("the") * :+ * "number" * :+ * "of" * :+ * str(1 - Nl) *
+                     fn [obj | cs] -> [{:function_call, "number", [obj], []} | cs] end
+
+                 :zero_arg_func <-
+                   str(:zero_arg_func_name) *
+                     fn [name | cs] -> [{:function_call, name, [], []} | cs] end
+
+                 :single_arg_func <-
+                   str(:single_arg_func_name) *
+                     fn [name | cs] -> [{:function_call, name, [], []} | cs] end
+
+                 :the_single_arg_func_of <-
+                   "the" * :+ * :single_arg_func * :+ * "of" * :+ * :expr *
+                     fn [ex, {:function_call, name, _, opts} | cs] ->
+                       [{:function_call, name, [ex], opts} | cs]
+                     end
+
+                 :single_arg_func_parens <-
+                   :single_arg_func * :+ * "(" * :+ * :expr * :+ * ")" *
+                     fn [ex, {:function_call, name, _, opts} | cs] ->
+                       [{:function_call, name, [ex], opts} | cs]
+                     end
+
+                 :list_arg_func <-
+                   str(:two_arg_func_name | :list_arg_func_name) * :+ *
+                     "(" * :+ * :expr_list * :+ * ")" *
+                     fn cs ->
+                       {exlist, [name | rest]} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
+                           cs,
+                           [reverse: true]
+                         ])
+
+                       [{:function_call, name, exlist, []} | rest]
+                     end
+
+                 :built_in_func <-
+                   :the_formatted_func
+                   | :the_single_arg_func_of
+                   | "the" * :+ * :zero_arg_func
+                   | :target_func
+                   | :number_func
+                   | :zero_arg_func * :+ * "(" * :+ * ")"
+                   | :single_arg_func_parens
+                   | :list_arg_func
+
+                 :user_func <-
+                   str(:id) * :+ * "(" * :+ * opt(:expr_list) * :+ * ")" *
+                     fn cs ->
+                       {exlist, [name | rest]} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
+                           cs,
+                           [reverse: true]
+                         ])
+
+                       [{:function_call, name, exlist, [user_defined: true]} | rest]
+                     end
+
+                 :function_call <- :built_in_func | :user_func
 
                  :message_name <- str(:id)
 
                  :message <-
                    :message_name * :+ * opt(:expr_list) *
                      fn cs ->
-                       {exprs, [name | rest]} =
-                         Enum.split_while(cs, fn c -> is_tuple(c) end)
+                       {exlist, [name | rest]} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
+                           cs,
+                           [reverse: true]
+                         ])
 
-                       [{:message, name, Enum.reverse(exprs)} | rest]
+                       [{:message, name, exlist} | rest]
                      end
 
                  :statement <-
-                   (:global | :return | :pass | :exit | :if | :message | :expr) *
+                   (:global
+                    | :return
+                    | :pass
+                    | :exit
+                    | :if
+                    | :repeat
+                    | :function_call
+                    | :message
+                    | :expr) *
                      fn [e | cs] -> [{:statement, e} | cs] end
 
                  :statement_list <-
                    :statement * :+ * star(+Nl * :+ * :statement) * :+ * star(Nl) *
                      fn cs ->
                        {stmnts, rest} =
-                         Enum.split_while(cs, fn c -> is_tuple(c) && elem(c, 0) == :statement end)
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
+                           cs,
+                           [in: :statement, reverse: true, extract: true]
+                         ])
 
-                       [
-                         {:statements,
-                          stmnts |> Enum.map(fn s -> elem(s, 1) end) |> Enum.reverse()}
-                         | rest
-                       ]
+                       [{:statements, stmnts} | rest]
                      end
 
                  :scriptlet <-
@@ -371,9 +662,10 @@ defmodule Hyperex.Grammar do
                      opt(:statement_list) * :+ * "end" * :+ * :handler_end *
                      fn cs ->
                        {handler, rest} =
-                         Enum.split_with(cs, fn c ->
-                           is_tuple(c) && elem(c, 0) in [:params, :statements, :handler_name]
-                         end)
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
+                           cs,
+                           [in: [:params, :statements, :handler_name]]
+                         ])
 
                        {name, params, stmnts} =
                          Enum.reduce(handler, {"", [], []}, fn elem, {n, p, s} ->
@@ -394,9 +686,10 @@ defmodule Hyperex.Grammar do
                      opt(:statement_list) * :+ * "end" * :+ * :id *
                      fn cs ->
                        {function, rest} =
-                         Enum.split_with(cs, fn c ->
-                           is_tuple(c) && elem(c, 0) in [:params, :statements, :function_name]
-                         end)
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
+                           cs,
+                           [in: [:params, :statements, :function_name]]
+                         ])
 
                        {name, params, stmnts} =
                          Enum.reduce(function, {"", [], []}, fn elem, {n, p, s} ->
@@ -417,13 +710,12 @@ defmodule Hyperex.Grammar do
                      star(Nl) *
                      fn cs ->
                        {elems, rest} =
-                         Enum.split_while(cs, fn c ->
-                           is_tuple(c) && elem(c, 0) in [:handler, :function]
-                         end)
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
+                           cs,
+                           [in: [:handler, :function], reverse: true]
+                         ])
 
-                       [
-                         {:script, Enum.reverse(elems)} | rest
-                       ]
+                       [{:script, elems} | rest]
                      end
 
                  :program <- :+ * (:script | :scriptlet) * :+
