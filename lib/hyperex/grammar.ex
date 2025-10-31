@@ -31,6 +31,8 @@ defmodule Hyperex.Grammar do
                    | "send"
                    | "then"
                    # add all the others!
+                   | :message_name
+                   | :command_name
                    | :date_time_func_name
                    | :zero_arg_func_name
                    | :single_arg_func_name
@@ -289,7 +291,11 @@ defmodule Hyperex.Grammar do
                    "return" * :+ * opt(:expr) *
                      fn cs -> [{:return, cs}] end
 
-                 :handler_name <- str(:id) * fn [name | cs] -> [{:handler_name, name} | cs] end
+                 :handler_id <- :command_name | :message_name | :id
+
+                 :handler_name <-
+                   str(:handler_id) *
+                     fn [name | cs] -> [{:handler_name, name} | cs] end
 
                  :pass <-
                    "pass" * :+ * :handler_name *
@@ -411,6 +417,196 @@ defmodule Hyperex.Grammar do
 
                        [format | cs]
                      end
+
+                 :message_name <-
+                   "appleEvent"
+                   | "appleevent"
+                   | "arrowKey"
+                   | "arrowkey"
+                   | "closeBackground"
+                   | "closebackground"
+                   | "closeCard"
+                   | "closecard"
+                   | "closeField"
+                   | "closefield"
+                   | "closePalette"
+                   | "closepalette"
+                   | "closePicture"
+                   | "closepicture"
+                   | "closeStack"
+                   | "closestack"
+                   | "close"
+                   | "commandKeyDown"
+                   | "commandkeydown"
+                   | "controlKey"
+                   | "controlkey"
+                   | "deleteBackground"
+                   | "deletebackground"
+                   | "deleteButton"
+                   | "deletebutton"
+                   | "deleteCard"
+                   | "deletecard"
+                   | "deleteField"
+                   | "deletefield"
+                   | "deleteStack"
+                   | "deletestack"
+                   | "doMenu"
+                   | "domenu"
+                   | "enterInField"
+                   | "enterinfield"
+                   | "enterKey"
+                   | "enterkey"
+                   | "errorDialog"
+                   | "errordialog"
+                   | "exitField"
+                   | "exitfield"
+                   | "functionKey"
+                   | "functionkey"
+                   | "help"
+                   | "hide"
+                   | "idle"
+                   | "keyDown"
+                   | "keydown"
+                   | "mouseDoubleClick"
+                   | "mousedoubleclick"
+                   | "mouseDownInPicture"
+                   | "mousedowninpicture"
+                   | "mouseDown"
+                   | "mousedown"
+                   | "mouseEnter"
+                   | "mouseenter"
+                   | "mouseLeave"
+                   | "mouseleave"
+                   | "mouseStillDown"
+                   | "mousestilldown"
+                   | "mouseUpInPicture"
+                   | "mouseupinpicture"
+                   | "mouseUp"
+                   | "mouseup"
+                   | "mouseWithin"
+                   | "mousewithin"
+                   | "moveWindow"
+                   | "movewindow"
+                   | "newBackground"
+                   | "newbackground"
+                   | "newButton"
+                   | "newbutton"
+                   | "newCard"
+                   | "newcard"
+                   | "newField"
+                   | "newfield"
+                   | "newStack"
+                   | "newstack"
+                   | "openBackground"
+                   | "openbackground"
+                   | "openCard"
+                   | "opencard"
+                   | "openField"
+                   | "openfield"
+                   | "openPalette"
+                   | "openpalette"
+                   | "openPicture"
+                   | "openpicture"
+                   | "openStack"
+                   | "openstack"
+                   | "quit"
+                   | "resume"
+                   | "resumeStack"
+                   | "resumestack"
+                   | "returnInField"
+                   | "returninfield"
+                   | "returnKey"
+                   | "returnkey"
+                   | "show"
+                   | "sizeWindow"
+                   | "sizewindow"
+                   | "startUp"
+                   | "startup"
+                   | "suspendStack"
+                   | "suspendstack"
+                   | "suspend"
+                   | "tabKey"
+                   | "tabkey"
+
+                 :command_name <-
+                   "add"
+                   | "answer"
+                   | "arrowKey"
+                   | "arrowkey"
+                   | "ask"
+                   | "beep"
+                   | "choose"
+                   | "click"
+                   | "close"
+                   | "commandKeyDown"
+                   | "commandkeyDown"
+                   | "controlKey"
+                   | "controlkey"
+                   | "convert"
+                   | "create"
+                   | "debug"
+                   | "delete"
+                   | "dial"
+                   | "disable"
+                   | "divide"
+                   | "do"
+                   | "doMenu"
+                   | "domenu"
+                   | "drag"
+                   | "enable"
+                   | "enterInField"
+                   | "enterinfield"
+                   | "enterKey"
+                   | "enterkey"
+                   | "export"
+                   | "find"
+                   | "get"
+                   | "go"
+                   | "help"
+                   | "hide"
+                   | "import"
+                   | "keyDown"
+                   | "keydown"
+                   | "lock"
+                   | "mark"
+                   | "multiply"
+                   | "next"
+                   | "open"
+                   | "palette"
+                   | "picture"
+                   | "play"
+                   | "pop"
+                   | "print"
+                   | "push"
+                   | "put"
+                   | "read"
+                   | "reply"
+                   | "request"
+                   | "reset"
+                   | "returnInField"
+                   | "returninfield"
+                   | "returnKey"
+                   | "returnkey"
+                   | "save"
+                   | "select"
+                   | "send"
+                   | "set"
+                   | "show"
+                   | "sort"
+                   | "stop"
+                   | "subtract"
+                   | "tabKey"
+                   | "tabkey"
+                   | "type"
+                   | "unlock"
+                   | "ummark"
+                   | "visual"
+                   | "wait"
+                   | "write"
+
+                 :command <-
+                   str(:command_name) * :+ * str(star(1 - "\n")) *
+                     fn [args, name | cs] -> [{:command, name, args} | cs] end
 
                  :date_time_func_name <- "date" | "time"
 
@@ -610,10 +806,8 @@ defmodule Hyperex.Grammar do
 
                  :function_call <- :built_in_func | :user_func
 
-                 :message_name <- str(:id)
-
                  :message <-
-                   :message_name * :+ * opt(:expr_list) *
+                   str(:message_name | :id) * :+ * opt(:expr_list) *
                      fn cs ->
                        {exlist, [name | rest]} =
                          Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
@@ -631,6 +825,7 @@ defmodule Hyperex.Grammar do
                     | :exit
                     | :if
                     | :repeat
+                    | :command
                     | :function_call
                     | :message
                     | :expr) *
@@ -654,12 +849,10 @@ defmodule Hyperex.Grammar do
 
                  :param <- str(:id) * fn [v | cs] -> [{:param, String.downcase(v)} | cs] end
 
-                 :handler_end <- :id
-
                  :handler <-
                    "on" * :+ * :handler_name * :+ * opt(:parameter_list) * :+ * +Nl *
                      :+ *
-                     opt(:statement_list) * :+ * "end" * :+ * :handler_end *
+                     opt(:statement_list) * :+ * "end" * :+ * :handler_id *
                      fn cs ->
                        {handler, rest} =
                          Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [

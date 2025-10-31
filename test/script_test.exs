@@ -187,6 +187,12 @@ defmodule Hyperex.ScriptTest do
     end
   end
 
+  describe "scriplet command" do
+    test "show", %{peg: peg} do
+      run(peg, "show marked cards", :ok, scriptlet: [{:command, "show", "marked cards"}])
+    end
+  end
+
   describe "scriplet function call" do
     test "the target", %{peg: peg} do
       run(peg, "the target", :ok, scriptlet: [{:function_call, "the_target", [], []}])
