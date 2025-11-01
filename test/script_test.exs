@@ -211,10 +211,17 @@ defmodule Hyperex.ScriptTest do
     end
 
     test "english name", %{peg: peg} do
+      run(peg, "the english name of myVar", :ok,
+        scriptlet: [{:object_property, "name", {:var, "myVar"}, [format: :english]}]
+      )
+    end
+
+    test "BUG english name", %{peg: peg} do
       run(peg, "the english name of fieldVar", :ok,
         scriptlet: [{:object_property, "name", {:var, "fieldVar"}, [format: :english]}]
       )
     end
+
   end
 
   describe "scriplet function call" do
