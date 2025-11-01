@@ -199,15 +199,21 @@ defmodule Hyperex.ScriptTest do
     end
 
     test "long version", %{peg: peg} do
-      run(peg, "the long version", :ok, scriptlet: [{:global_property, "version", [format: :long]}])
+      run(peg, "the long version", :ok,
+        scriptlet: [{:global_property, "version", [format: :long]}]
+      )
     end
 
     test "object", %{peg: peg} do
-      run(peg, "the rect of fieldVar", :ok, scriptlet: [{:object_property, "rect", {:var, "fieldVar"}, []}])
+      run(peg, "the rect of fieldVar", :ok,
+        scriptlet: [{:object_property, "rect", {:var, "fieldVar"}, []}]
+      )
     end
 
     test "english name", %{peg: peg} do
-      run(peg, "the english name of fieldVar", :ok, scriptlet: [{:object_property, "name", {:var, "fieldVar"}, [format: :english]}])
+      run(peg, "the english name of fieldVar", :ok,
+        scriptlet: [{:object_property, "name", {:var, "fieldVar"}, [format: :english]}]
+      )
     end
   end
 
@@ -252,6 +258,12 @@ defmodule Hyperex.ScriptTest do
       run(peg, "test21 2, b\nexit to HyperCard", :ok,
         scriptlet: [{:message, "test21", [integer: 2, var: "b"]}, :exit_to_hypercard]
       )
+    end
+  end
+
+  describe "scriptlet parts" do
+    test "named stack", %{peg: peg} do
+      run(peg, "stack \"Home\"", :ok, scriptlet: [{:stack, {:string_lit, "Home"}}])
     end
   end
 

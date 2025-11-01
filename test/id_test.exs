@@ -30,6 +30,10 @@ defmodule Hyperex.IdTest do
     run(peg, "else2")
   end
 
+  test "parses id like field", %{peg: peg} do
+    run(peg, "fieldVar")
+  end
+
   test "fails reserved", %{peg: peg} do
     run(peg, "else", :error)
   end
