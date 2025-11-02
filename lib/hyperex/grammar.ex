@@ -4,7 +4,7 @@ defmodule Hyperex.Grammar do
   import Xpeg
 
   @peg_script (peg(:program) do
-                 ## Inlined delimeters
+                 ### Inlined delimeters
                  Ws <- " " | "\t"
                  Soi <- "{{"
                  Eoi <- "}}"
@@ -12,7 +12,7 @@ defmodule Hyperex.Grammar do
                  Sp <- +Ws
                  Eol <- Eoi | Nl
 
-                 ## Program, script, scriptlet
+                 ### Program, script, scriptlet
                  :program <- Soi * star(Nl) * :+ * (:script | :scriptlet) * :+ * Eoi
 
                  :script <-
@@ -34,7 +34,7 @@ defmodule Hyperex.Grammar do
                    :statement_list *
                      fn [stmnts | _] -> [scriptlet: elem(stmnts, 1)] end
 
-                 ## All the rest
+                 ### All the rest
                  :statement_list <-
                    :statement * star(+Nl * :statement) * ((&Eoi) | +Nl) *
                      fn cs ->
@@ -221,8 +221,7 @@ defmodule Hyperex.Grammar do
 
                  :string_lit <- "'" * :single_quoted * "'" | "\"" * :double_quoted * "\""
 
-                 # Factor - containers
-
+                 ### Factor - containers
                  :container_special <-
                    str("It" | "it" | "each" | "target")
                    | opt("the") * :+ * str("selection") *
@@ -253,6 +252,18 @@ defmodule Hyperex.Grammar do
                        fn [{:menu, m}, mid | cs] -> [{:menu_item, mid, m} | cs] end
 
                  # Parts
+                 # Order is important, e.g. "opt(:card) :button" before ":card :expr"
+                 :part <-
+                   :me
+                   | :stack_part
+                   | :card_part_part
+                   | :background_part_part
+                   | :button_part
+                   | :field_part
+                   | :window_part
+                   | :card_part
+                   | :background_part
+
                  :by_position <-
                    str(:position) *
                      fn [v | cs] -> [{:by_position, v} | cs] end
@@ -261,19 +272,42 @@ defmodule Hyperex.Grammar do
                    "id" * Ws * :expr *
                      fn [ex | cs] -> [{:by_id, ex} | cs] end
 
-                 :by_number <-
+                 :by_name_or_number <-
                    :expr *
-                     fn [ex | cs] -> [{:by_number, ex} | cs] end
+                     fn [ex | cs] -> [{:by_name_or_number, ex} | cs] end
 
-                 :by_id_or_number <- :by_id | :by_number
+                 :by_id_or_number <- :by_id | :by_name_or_number
 
-                 :card_part_part <-
-                   :card * Ws * "part" * Ws * :expr *
-                     fn [ex | cs] -> [{:card_part, ex} | cs] end
+                 # These can come after :expr, so ws may have been consumed already
+                 :of_stack <-
+                   :+ * :of * Ws * :stack_part *
+                     fn [stack, card | cs] ->
+                       [{:stack_card, stack, card} | cs]
+                     end
 
-                 :background_part_part <-
-                   :background * Ws * "part" * Ws * :expr *
-                     fn [ex | cs] -> [{:background_part, ex} | cs] end
+                 :of_card_or_background <-
+                   :+ * :of * Ws * (:card_part | :background_part) *
+                     fn cs ->
+                       case cs do
+                         [{:stack_card, {:stack, stack}, {:card, card}}, part | rest] ->
+                           [{:stack_part, stack, {:card_part, card, part}} | rest]
+
+                         [{:stack_card, {:stack, stack}, {:background, bkgnd}}, part | rest] ->
+                           [{:stack_part, stack, {:background_part, bkgnd, part}} | rest]
+
+                         [{:card, card}, part | rest] ->
+                           [{:card_part, card, part} | rest]
+
+                         [{:background, bkgnd}, part | rest] ->
+                           [{:background_part, bkgnd, part} | rest]
+                       end
+                     end
+
+                 ### Me
+                 :me <- "me" * fn cs -> [:me | cs] end
+
+                 ### Stack part
+                 :stack_part <- :named_stack | :this_stack
 
                  :named_stack <-
                    "stack" * Ws * :expr *
@@ -283,21 +317,83 @@ defmodule Hyperex.Grammar do
                    opt("this" * Ws) * "stack" *
                      fn cs -> [{:stack, :this} | cs] end
 
-                 :stack_part <- :named_stack | :this_stack
-                 :of_background_or_stack <- :of * Ws * (:background_part | :stack_part)
-                 :of_stack <- :of * Ws * :stack_part
+                 ### Window part
+                 :window_part <- :id_window | opt("the" * Ws) * (:system_window | :card_window)
 
-                 :specific_background <-
-                   (:by_position * Ws * :background
-                    | :background * Ws * :by_id_or_number) *
-                     fn [ex | cs] -> [{:background, ex} | cs] end
+                 :id_window <-
+                   "window" * opt(Ws * "id") * Ws * :expr *
+                     fn [ex | cs] -> [{:id_window, ex} | cs] end
 
-                 :this_background <-
-                   opt("this" * Ws) * :background *
-                     fn cs -> [{:background, :this} | cs] end
+                 :system_window <-
+                   (str("tool" | "pattern") * Ws * "window"
+                    | str("message" | "variable") * Ws * "watcher") *
+                     fn [name | cs] -> [{:system_window, name} | cs] end
 
-                 :background_part <-
-                   (:specific_background | :this_background) * opt(Ws * :of_stack)
+                 :card_window <-
+                   :card * Ws * "window" *
+                     fn cs -> [:card_window | cs] end
+
+                 ### Card "part" part
+                 :card_part_part <-
+                   :card * Ws * "part" * Ws * :expr *
+                     fn [ex | cs] -> [{:card_part, ex} | cs] end
+
+                 ### Background "part" part
+                 :background_part_part <-
+                   :background * Ws * "part" * Ws * :expr *
+                     fn [ex | cs] -> [{:background_part, ex} | cs] end
+
+                 ### Button part, can start with :card or :background
+                 :button_part <-
+                   (:button_by_position | :button_by_id_or_number) * opt(:of_card_or_background)
+
+                 :button_by_position <-
+                   :by_position * Ws * :background_or_card_button *
+                     fn [type, pos | cs] ->
+                       [{type, pos} | cs]
+                     end
+
+                 :button_by_id_or_number <-
+                   :background_or_card_button * Ws * :by_id_or_number *
+                     fn [id, type | cs] ->
+                       [{type, id} | cs]
+                     end
+
+                 :background_or_card_button <- :background_button | :card_button
+
+                 :background_button <-
+                   :background * Ws * :button * fn cs -> [:background_button | cs] end
+
+                 :card_button <-
+                   opt(:card * Ws) * :button * fn cs -> [:card_button | cs] end
+
+                 ### Field part, can start with :card or :background
+                 :field_part <-
+                   (:field_by_position | :field_by_id_or_number) * opt(:of_card_or_background)
+
+                 :card_field <-
+                   :card * Ws * :field * fn cs -> [:card_field | cs] end
+
+                 :field_by_position <-
+                   :by_position * Ws * :background_or_card_field *
+                     fn [type, pos | cs] ->
+                       [{type, pos} | cs]
+                     end
+
+                 :field_by_id_or_number <-
+                   :background_or_card_field * Ws * :by_id_or_number *
+                     fn [id, type | cs] ->
+                       [{type, id} | cs]
+                     end
+
+                 :background_field <-
+                   opt(:background * Ws) * :field * fn cs -> [:background_field | cs] end
+
+                 :background_or_card_field <- :card_field | :background_field
+
+                 ### Card part
+                 :card_part <-
+                   (:specific_card | :this_card) * opt(:of_stack)
 
                  :specific_card <-
                    (:by_position * Ws * :card
@@ -308,86 +404,20 @@ defmodule Hyperex.Grammar do
                    opt("this" * Ws) * :card *
                      fn cs -> [{:card, :this} | cs] end
 
-                 :card_part <-
-                   (:specific_card | :this_card) * opt(Ws * :of_stack)
+                 ### Background part
+                 :background_part <-
+                   (:specific_background | :this_background) * opt(:of_stack)
 
-                 :of_card <- :of * Ws * :card_part
+                 :specific_background <-
+                   (:by_position * Ws * :background
+                    | :background * Ws * :by_id_or_number) *
+                     fn [ex | cs] -> [{:background, ex} | cs] end
 
-                 :background_button <-
-                   :background * Ws * :button * fn cs -> [:background_button | cs] end
+                 :this_background <-
+                   opt("this" * Ws) * :background *
+                     fn cs -> [{:background, :this} | cs] end
 
-                 :card_button <-
-                   opt(:card * Ws) * :button * fn cs -> [:card_button | cs] end
-
-                 :background_or_card_button <- :background_button | :card_button
-
-                 :button_by_position <-
-                   :by_position * Ws * :background_or_card_button *
-                     fn [type, pos | cs] ->
-                       [{:button, type, pos} | cs]
-                     end
-
-                 :button_by_id_or_number <-
-                   :background_or_card_button * Ws * :by_id_or_number *
-                     fn [id, type | cs] ->
-                       [{:button, type, id} | cs]
-                     end
-
-                 :button_part <-
-                   (:button_by_position | :button_by_id_or_number) * opt(Ws * :of_card)
-
-                 :card_field <-
-                   :card * Ws * :field * fn cs -> [:card_field | cs] end
-
-                 :background_field <-
-                   opt(:background * Ws) * :field * fn cs -> [:background_field | cs] end
-
-                 :background_or_card_field <- :card_field | :background_field
-
-                 :field_by_position <-
-                   :by_position * Ws * :background_or_card_field *
-                     fn [type, pos | cs] ->
-                       [{:field, type, pos} | cs]
-                     end
-
-                 :field_by_id_or_number <-
-                   :background_or_card_field * Ws * :by_id_or_number *
-                     fn [id, type | cs] ->
-                       [{:field, type, id} | cs]
-                     end
-
-                 :field_part <- (:field_by_position | :field_by_id_or_number) * opt(Ws * :of_card)
-
-                 :id_window <-
-                   "window" * opt(Ws * "id") * Ws * :expr *
-                     fn [ex | cs] -> [{:id_window, ex} | cs] end
-
-                 :card_window <-
-                   :card * Ws * "window" *
-                     fn cs -> [:card_window | cs] end
-
-                 :system_window <-
-                   (str("tool" | "pattern") * Ws * "window"
-                    | str("message" | "variable") * Ws * "watcher") *
-                     fn [name | cs] -> [{:system_window, name} | cs] end
-
-                 :window_part <- :id_window | opt("the" * Ws) * (:card_window | :system_window)
-
-                 :me <- "me" * fn cs -> [:me | cs] end
-
-                 # Order is important, e.g. "opt(:card) :button" before ":card :expr"
-                 :part <-
-                   :me
-                   | :stack_part
-                   | :button_part
-                   | :field_part
-                   | :window_part
-                   | :card_part_part
-                   | :card_part
-                   | :background_part_part
-                   | :background_part
-
-                 # Operators, lowest to highest binding power
+                 ### Expression operators, lowest to highest binding power
                  :infix_b1 <-
                    "or" * :+ * :expr *
                      fn [b, a | cs] ->
