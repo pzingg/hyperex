@@ -9,7 +9,7 @@ defmodule Hyperex.ScriptTest do
   end
 
   def run(p, s, exp_result \\ :ok, exp_captures \\ []) do
-    r = match(p, s)
+    r = match(p, "{{" <> s <> "}}")
 
     result =
       if r.result == :ok && r.rest != [] do
@@ -19,7 +19,7 @@ defmodule Hyperex.ScriptTest do
         r.result
       end
 
-    assert(result == exp_result)
+    assert(result == exp_result, "expected #{inspect(exp_result)}, got #{inspect(result)}")
     assert(r.captures == exp_captures)
   end
 
@@ -188,40 +188,85 @@ defmodule Hyperex.ScriptTest do
   end
 
   describe "scriplet command" do
-    test "show", %{peg: peg} do
-      run(peg, "show marked cards", :ok, scriptlet: [{:command, "show", "marked cards"}])
+    test "beep no args", %{peg: peg} do
+      run(peg, "beep", :ok, scriptlet: [{:command, "beep", ""}])
+    end
+
+    test "beep with args", %{peg: peg} do
+      run(peg, "beep 2", :ok, scriptlet: [{:command, "beep", "2"}])
+    end
+
+    test "show with args", %{peg: peg} do
+      run(peg, "show tool window", :ok, scriptlet: [{:command, "show", "tool window"}])
     end
   end
 
   describe "scriplet property" do
-    test "global", %{peg: peg} do
-      run(peg, "the address", :ok, scriptlet: [{:global_property, "address", []}])
+    test "global blindTyping", %{peg: peg} do
+      run(peg, "blindTyping", :ok, scriptlet: [{:global_property, "blindTyping", []}])
     end
 
-    test "long version", %{peg: peg} do
+    test "hypercard address", %{peg: peg} do
+      run(peg, "address of HyperCard", :ok, scriptlet: [{:global_property, "address", []}])
+    end
+
+    test "hypercard version", %{peg: peg} do
+      run(peg, "version", :ok, scriptlet: [{:global_property, "version", []}])
+    end
+
+    test "hypercard long version", %{peg: peg} do
+      run(peg, "long version", :ok, scriptlet: [{:global_property, "version", [format: :long]}])
+    end
+
+    test "rect", %{peg: peg} do
+      run(peg, "rect of myVar", :ok, scriptlet: [{:object_property, "rect", {:var, "myVar"}, []}])
+    end
+
+    test "name", %{peg: peg} do
+      run(peg, "name of myVar", :ok, scriptlet: [{:object_property, "name", {:var, "myVar"}, []}])
+    end
+
+    test "english name", %{peg: peg} do
+      run(peg, "english name of myVar", :ok,
+        scriptlet: [{:object_property, "name", {:var, "myVar"}, [format: :english]}]
+      )
+    end
+
+    test "global the blindTyping", %{peg: peg} do
+      run(peg, "the blindTyping", :ok, scriptlet: [{:global_property, "blindTyping", []}])
+    end
+
+    test "the hypercard address", %{peg: peg} do
+      run(peg, "the address of HyperCard", :ok, scriptlet: [{:global_property, "address", []}])
+    end
+
+    test "the hypercard version", %{peg: peg} do
+      run(peg, "the version", :ok, scriptlet: [{:global_property, "version", []}])
+    end
+
+    test "the hypercard long version", %{peg: peg} do
       run(peg, "the long version", :ok,
         scriptlet: [{:global_property, "version", [format: :long]}]
       )
     end
 
-    test "object", %{peg: peg} do
-      run(peg, "the rect of fieldVar", :ok,
-        scriptlet: [{:object_property, "rect", {:var, "fieldVar"}, []}]
+    test "the rect", %{peg: peg} do
+      run(peg, "the rect of myVar", :ok,
+        scriptlet: [{:object_property, "rect", {:var, "myVar"}, []}]
       )
     end
 
-    test "english name", %{peg: peg} do
+    test "the name", %{peg: peg} do
+      run(peg, "the name of myVar", :ok,
+        scriptlet: [{:object_property, "name", {:var, "myVar"}, []}]
+      )
+    end
+
+    test "the english name", %{peg: peg} do
       run(peg, "the english name of myVar", :ok,
         scriptlet: [{:object_property, "name", {:var, "myVar"}, [format: :english]}]
       )
     end
-
-    test "BUG english name", %{peg: peg} do
-      run(peg, "the english name of fieldVar", :ok,
-        scriptlet: [{:object_property, "name", {:var, "fieldVar"}, [format: :english]}]
-      )
-    end
-
   end
 
   describe "scriplet function call" do
@@ -252,16 +297,20 @@ defmodule Hyperex.ScriptTest do
 
   describe "scriptlet message" do
     test "without params", %{peg: peg} do
-      run(peg, "test20", :ok, scriptlet: [{:message, "test20", []}])
+      run(peg, "test20", :ok, scriptlet: [message_or_var: "test20"])
     end
 
-    test "with params", %{peg: peg} do
+    test "with string params", %{peg: peg} do
       run(peg, "searchScript \"WildCard\", \"Help\"", :ok,
         scriptlet: [{:message, "searchScript", [string_lit: "WildCard", string_lit: "Help"]}]
       )
     end
 
-    test "followed by another statement", %{peg: peg} do
+    test "with var params", %{peg: peg} do
+      run(peg, "test21 2, b", :ok, scriptlet: [{:message, "test21", [integer: 2, var: "b"]}])
+    end
+
+    test "with var params followed by another statement", %{peg: peg} do
       run(peg, "test21 2, b\nexit to HyperCard", :ok,
         scriptlet: [{:message, "test21", [integer: 2, var: "b"]}, :exit_to_hypercard]
       )
@@ -288,7 +337,7 @@ defmodule Hyperex.ScriptTest do
     end
 
     test "fails unescaped single quoted", %{peg: peg} do
-      run(peg, "'hello' world'", :partial, scriptlet: [string_lit: "hello"])
+      run(peg, "'hello' world'", :error, statement: {:string_lit, "hello"})
     end
 
     test "parses float", %{peg: peg} do

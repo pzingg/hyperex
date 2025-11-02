@@ -20,3 +20,18 @@ end
 Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
 and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
 be found at <https://hexdocs.pm/hyperex>.
+
+## Notes
+
+The PEG parser is greedy. There was a bug in trying to parse this scriplet:
+
+```
+the english name of fieldVal
+```
+
+When the parser got to "fieldVal", it found a rule for identifying fields
+and just gladly ate up the "field" part of the string. I inserted a 
+`:^` (mandatory white space) in a few of the rules, just before the end
+of the rule that had an `opt`. This also may require appending a space 
+character to the end of all scripts (or to the ends of each line in a
+script).

@@ -4,18 +4,109 @@ defmodule Hyperex.Grammar do
   import Xpeg
 
   @peg_script (peg(:program) do
-                 Whitespace <- " " | "\t"
-                 ConsumeLine <- star(1 - "\n")
-                 Comment <- "--" * ConsumeLine
-                 # Token delimeter
-                 :+ <- opt(Whitespace | Comment)
+                 :program <- Soi * star(Nl) * :+ * (:script | :scriptlet) * :+ * Eoi
 
-                 # Basics
-                 Nl <- "\n"
-                 AlphaLower <- {~c"a"..~c"z"}
-                 Alpha <- {~c"A"..~c"Z"} | AlphaLower
-                 Digit <- {~c"0"..~c"9"}
-                 Word <- AlphaLower * star(Alpha | Digit)
+                 :script <-
+                   :script_elem * star(+Nl * :script_elem) * ((&Eoi) | +Nl) *
+                     fn cs ->
+                       {elems, rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
+                           cs,
+                           [in: [:handler, :function], reverse: true]
+                         ])
+
+                       [{:script, elems} | rest]
+                     end
+
+                 :script_elem_kind <- :handler | :function_def
+                 :script_elem <- :+ * :script_elem_kind
+
+                 :scriptlet <-
+                   :statement_list *
+                     fn [stmnts | _] -> [scriptlet: elem(stmnts, 1)] end
+
+                 :statement_list <-
+                   :statement * star(+Nl * :statement) * ((&Eoi) | +Nl) *
+                     fn cs ->
+                       {stmnts, rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
+                           cs,
+                           [in: :statement, reverse: true, extract: true]
+                         ])
+
+                       [{:statements, stmnts} | rest]
+                     end
+
+                 :statement_kind <-
+                   :global
+                   | :return
+                   | :pass
+                   | :exit
+                   | :if
+                   | :repeat
+                   | :expr
+                   | :command
+                   | :message_with_params
+                   | :message_or_var
+
+                 :statement <-
+                   :+ * :statement_kind *
+                     fn [e | cs] -> [{:statement, e} | cs] end
+
+                 :term_b10 <- :factor | :prefix_b10
+
+                 :factor <-
+                   "(" * :+ * :expr_or_var * :+ * ")"
+                   | :constant
+                   | :float
+                   | :integer
+                   | :function_call
+                   | :container
+
+                 :container <-
+                   :container_special
+                   | :string_lit
+                   | :message_box
+                   | :part
+                   | :menu
+                   | :menu_item
+                   | :property
+
+                 :function_call <- :built_in_func | :user_func
+
+                 :message_with_params <-
+                   str(:message_name | :id) * Sp * :expr_list *
+                     fn cs ->
+                       {exlist, [name | rest]} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
+                           cs,
+                           [reverse: true]
+                         ])
+
+                       [{:message, name, exlist} | rest]
+                     end
+
+                 :expr_list <- :expr_or_var * star(:+ * "," * :+ * :expr_or_var)
+
+                 :expr <- :+ * :term_b2 * :+ * star(:+ * :infix_b1)
+
+                 :expr_or_var <- :expr | :variable
+
+                 :message_or_var <-
+                   str(:message_name | :id) *
+                     fn [name | cs] -> [{:message_or_var, name} | cs] end
+
+                 :variable <-
+                   str(:message_name | :id) *
+                     fn [name | cs] -> [{:var, name} | cs] end
+
+                 :command <- :arg_command | :zero_arg_command
+
+                 :property <-
+                   opt("the" * Sp) *
+                     (:object_property_phrase
+                      | :global_system_property
+                      | :global_hypercard_property)
 
                  Reserved <-
                    "else"
@@ -57,9 +148,6 @@ defmodule Hyperex.Grammar do
                    | "the"
                    | "is"
                    | "not"
-
-                 NonReserved <- Reserved * +(Alpha | Digit)
-                 :id <- NonReserved | Word - Reserved
 
                  # HyperTalk vocabulary
                  :true_false <- "true" | "false"
@@ -120,7 +208,7 @@ defmodule Hyperex.Grammar do
                      | "linefeed"
                      | "comma"
                      | "colon"
-                   ) * fn [v | cs] -> [{:constant, String.downcase(v)} | cs] end
+                   ) * fn [v | cs] -> [{:constant, v} | cs] end
 
                  # Properties
 
@@ -331,87 +419,91 @@ defmodule Hyperex.Grammar do
 
                  :hypercard_property <-
                    str("address")
-                   | opt(:adjective) * :+ * str("ID" | "id" | "name")
-                   | opt(:long_opt) * :+ * str("version")
+                   | opt(:long_opt * Sp) * str("version")
+                   | opt(:adjective * Sp) * str("ID" | "id" | "name")
+
+                 :global_hypercard_property <-
+                   :hypercard_property * :+ * opt(opt("of") * :+ * ("HyperCard" | "hypercard")) *
+                     fn cs ->
+                       case cs do
+                         [name, {:format, _} = fmt | rest] ->
+                           [{:global_property, name, [fmt]} | rest]
+
+                         [name | rest] ->
+                           [{:global_property, name, []} | rest]
+                       end
+                     end
 
                  :global_property <-
-                   str(
-                     "blindTyping"
-                     | "blindtyping"
-                     | "cursor"
-                     | "debugger"
-                     | "dialingTime"
-                     | "dialingtime"
-                     | "dialingVolume"
-                     | "dialingvolume"
-                     | "dragSpeed"
-                     | "dragspeed"
-                     | "editBkgnd"
-                     | "editbkgnd"
-                     | "environment"
-                     | "itemDelimiter"
-                     | "itemdelimiter"
-                     | "language"
-                     | "lockErrorDialogs"
-                     | "lockerrordialogs"
-                     | "lockMessages"
-                     | "lockmessages"
-                     | "lockRecent"
-                     | "lockrecent"
-                     | "lockScreen"
-                     | "lockscreen"
-                     | "longWindowTitles"
-                     | "longwindowtitles"
-                     | "messageWatcher"
-                     | "messagewatcher"
-                     | "numberFormat"
-                     | "numberformat"
-                     | "powerKeys"
-                     | "powerkeys"
-                     | "printMargins"
-                     | "printmargins"
-                     | "printTextAlign"
-                     | "printtextalign"
-                     | "printTextFont"
-                     | "printtextfont"
-                     | "printTextHeight"
-                     | "printtextheight"
-                     | "printTextSize"
-                     | "printtextsize"
-                     | "printTextStyle"
-                     | "printtextstyle"
-                     | "scriptEditor"
-                     | "scripteditor"
-                     | "scriptingLanguage"
-                     | "scriptinglanguage"
-                     | "scriptTextFont"
-                     | "scripttextfont"
-                     | "scriptTextSize"
-                     | "scripttextsize"
-                     | "stacksInUse"
-                     | "stacksinuse"
-                     | "suspended"
-                     | "textArrows"
-                     | "textarrows"
-                     | "traceDelay"
-                     | "tracedelay"
-                     | "userLevel"
-                     | "userlevel"
-                     | "userModify"
-                     | "usermodify"
-                     | "variableWatcher"
-                     | "variablewatcher"
-                   )
-                   | :hypercard_property * :+ * opt(opt("of") * :+ * ("HyperCard" | "hypercard")) *
-                       fn cs ->
-                         case cs do
-                           [name, {:format, _} = fmt | rest] ->
-                             [{:global_property, String.downcase(name), [fmt]} | rest]
+                   "blindTyping"
+                   | "blindtyping"
+                   | "cursor"
+                   | "debugger"
+                   | "dialingTime"
+                   | "dialingtime"
+                   | "dialingVolume"
+                   | "dialingvolume"
+                   | "dragSpeed"
+                   | "dragspeed"
+                   | "editBkgnd"
+                   | "editbkgnd"
+                   | "environment"
+                   | "itemDelimiter"
+                   | "itemdelimiter"
+                   | "language"
+                   | "lockErrorDialogs"
+                   | "lockerrordialogs"
+                   | "lockMessages"
+                   | "lockmessages"
+                   | "lockRecent"
+                   | "lockrecent"
+                   | "lockScreen"
+                   | "lockscreen"
+                   | "longWindowTitles"
+                   | "longwindowtitles"
+                   | "messageWatcher"
+                   | "messagewatcher"
+                   | "numberFormat"
+                   | "numberformat"
+                   | "powerKeys"
+                   | "powerkeys"
+                   | "printMargins"
+                   | "printmargins"
+                   | "printTextAlign"
+                   | "printtextalign"
+                   | "printTextFont"
+                   | "printtextfont"
+                   | "printTextHeight"
+                   | "printtextheight"
+                   | "printTextSize"
+                   | "printtextsize"
+                   | "printTextStyle"
+                   | "printtextstyle"
+                   | "scriptEditor"
+                   | "scripteditor"
+                   | "scriptingLanguage"
+                   | "scriptinglanguage"
+                   | "scriptTextFont"
+                   | "scripttextfont"
+                   | "scriptTextSize"
+                   | "scripttextsize"
+                   | "stacksInUse"
+                   | "stacksinuse"
+                   | "suspended"
+                   | "textArrows"
+                   | "textarrows"
+                   | "traceDelay"
+                   | "tracedelay"
+                   | "userLevel"
+                   | "userlevel"
+                   | "userModify"
+                   | "usermodify"
+                   | "variableWatcher"
+                   | "variablewatcher"
 
-                           [name | rest] ->
-                             [{:global_property, String.downcase(name), []} | rest]
-                         end
-                       end
+                 :global_system_property <-
+                   str(:global_property) *
+                     fn [name | cs] -> [{:global_property, name, []} | cs] end
 
                  :id_property <-
                    "number"
@@ -439,7 +531,6 @@ defmodule Hyperex.Grammar do
                    | "cantpeek"
                    | "freeSize"
                    | "freesize"
-                   | "name"
                    | "reportTemplates"
                    | "reporttemplates"
                    | "script"
@@ -614,27 +705,26 @@ defmodule Hyperex.Grammar do
                    | "vBarLoc"
                    | "vBarloc"
 
+                 :object_property_name <-
+                   :stack_property
+                   | :background_property
+                   | :card_property
+                   | :field_property
+                   | :button_property
+                   | :rectangle_property
+                   | :painting_property
+                   | :window_property
+                   | :menu_property
+                   | :watcher_property
+
                  :object_property <-
-                   str(
-                     :stack_property
-                     | :background_property
-                     | :card_property
-                     | :field_property
-                     | :button_property
-                     | :rectangle_property
-                     | :painting_property
-                     | :window_property
-                     | :menu_property
-                     | :watcher_property
-                   )
-                   | opt(:adjective) * :+ * str("ID" | "id" | "name")
-                   | opt(:english_opt) * :+ * str("name")
+                   str(:object_property_name)
+                   | opt(:english_opt * Sp) * str("name")
+                   | opt(:adjective * Sp) * str("ID" | "id" | "name")
 
                  :object_property_phrase <-
-                   :object_property * :+ * "of" * :+ * :expr *
+                   :object_property * Sp * "of" * Sp * :expr_or_var *
                      fn cs ->
-                       IO.inspect(cs, label: :object_property)
-
                        case cs do
                          [obj, name, {:format, _} = fmt | rest] ->
                            [{:object_property, name, obj, [fmt]} | rest]
@@ -643,8 +733,6 @@ defmodule Hyperex.Grammar do
                            [{:object_property, name, obj, []} | rest]
                        end
                      end
-
-                 :property <- opt("the") * :+ * (:object_property_phrase | :global_property)
 
                  # Factor - literals
                  :float <-
@@ -672,8 +760,6 @@ defmodule Hyperex.Grammar do
 
                  :string_lit <- "'" * :single_quoted * "'" | "\"" * :double_quoted * "\""
 
-                 :variable <- str(:id) * fn [v | cs] -> [{:var, v} | cs] end
-
                  # Factor - containers
 
                  :container_special <-
@@ -696,12 +782,12 @@ defmodule Hyperex.Grammar do
                      fn cs -> [{:container_message_box} | cs] end
 
                  :menu <-
-                   "menu" * :+ * :factor
+                   "menu" * :+ * :expr
                    | :position * :+ * "menu" *
                        fn [mid | cs] -> [{:menu, mid} | cs] end
 
                  :menu_item <-
-                   ("menuItem" | "menuitem") * :+ * :factor * :+ * "of" * :+ * :menu
+                   ("menuItem" | "menuitem") * :+ * :expr * :+ * "of" * :+ * :menu
                    | :position * :+ * ("menuItem" | "menuitem") * :+ * "of" * :+ * :menu *
                        fn [{:menu, m}, mid | cs] -> [{:menu_item, mid, m} | cs] end
 
@@ -794,11 +880,7 @@ defmodule Hyperex.Grammar do
                    :card * :+ * :field * fn cs -> [:card_field | cs] end
 
                  :background_field <-
-                   opt(:background) * :+ * :field *
-                     fn cs ->
-                       IO.inspect(cs, label: :background_field)
-                       [:background_field | cs]
-                     end
+                   opt(:background) * :+ * :field * fn cs -> [:background_field | cs] end
 
                  :background_or_card_field <- :card_field | :background_field
 
@@ -844,26 +926,7 @@ defmodule Hyperex.Grammar do
                    | :button_part
                    | :field_part
 
-                 :container <-
-                   :container_special
-                   | :message_box
-                   | :menu
-                   | :menu_item
-                   | :part
-                   | :property
-                   | :string_lit
-                   | :variable
-
-                 :factor <-
-                   "(" * :+ * :expr * :+ * ")"
-                   | :constant
-                   | :float
-                   | :integer
-                   | :function_call
-                   | :container
-
                  # Put factor first to avoid collision of negative :float
-                 :term_b10 <- :factor | :prefix_b10
                  :term_b9 <- :term_b10 * star(:+ * :infix_b9)
                  :term_b8 <- :term_b9 * star(:+ * :infix_b8)
                  :term_b7 <- :term_b8 * star(:+ * :infix_b7)
@@ -872,10 +935,6 @@ defmodule Hyperex.Grammar do
                  :term_b4 <- :term_b5 * star(:+ * :infix_b4)
                  :term_b3 <- :term_b4 * star(:+ * :infix_b3)
                  :term_b2 <- :term_b3 * star(:+ * :infix_b2)
-
-                 # Finally...
-                 :expr <- :+ * :term_b2 * :+ * star(:+ * :infix_b1)
-                 :expr_list <- :expr * :+ * star(:+ * "," * :+ * :expr)
 
                  # Operators, lowest to highest binding power
                  :infix_b1 <-
@@ -1059,18 +1118,18 @@ defmodule Hyperex.Grammar do
                  :exit <- "exit" * :+ * (:exit_to_hypercard | :exit_repeat | :exit_handler)
 
                  :end_if <- "end" * :+ * "if"
-                 :else_single <- :statement * opt(+(:+ * Nl) * :+ * :end_if)
-                 :else_multi <- +(:+ * Nl) * :+ * opt(:statement_list) * :+ * :end_if
+                 :else_single <- :statement * opt(+Nl * :+ * :end_if)
+                 :else_multi <- +Nl * :+ * opt(:statement_list) * :+ * :end_if
                  :else <- "else" * :+ * (:else_single | :else_multi)
 
                  :then_multiline <-
-                   +(:+ * Nl) * :+ * :statement_list * :+ * star(:+ * Nl) * :+ * (:else | :end_if)
+                   +Nl * :+ * :statement_list * star(Nl) * :+ * (:else | :end_if)
 
-                 :then_single_line <- :statement * :+ * opt(Nl) * :+ * opt(:else)
+                 :then_single_line <- :statement * opt(Nl) * :+ * opt(:else)
                  :then <- "then" * :+ * (:then_multiline | :then_single_line)
 
                  :if <-
-                   "if" * :+ * :expr * :+ * opt(Nl) * :+ * :then *
+                   "if" * :+ * :expr * opt(Nl) * :+ * :then *
                      fn cs ->
                        {stmnts, [test | rest]} =
                          Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
@@ -1123,7 +1182,7 @@ defmodule Hyperex.Grammar do
                    | :repeat_count
 
                  :repeat <-
-                   "repeat" * :+ * :repeat_range * +(:+ * Nl) * :+ * :statement_list * :+ *
+                   "repeat" * :+ * :repeat_range * +Nl * :+ * :statement_list * :+ *
                      "end" * :+ * "repeat" *
                      fn [{:statements, stmnts}, rep | cs] ->
                        rep =
@@ -1260,13 +1319,28 @@ defmodule Hyperex.Grammar do
                    | "tabKey"
                    | "tabkey"
 
-                 :command_name <-
+                 :zero_arg_command_name <-
+                   "enterInField"
+                   | "enterinfield"
+                   | "enterKey"
+                   | "enterkey"
+                   | "help"
+                   | "returnInField"
+                   | "returninfield"
+                   | "returnKey"
+                   | "returnkey"
+                   | "tabKey"
+                   | "tabkey"
+
+                 :zero_or_arg_command_name <-
+                   "beep"
+
+                 :arg_command_name <-
                    "add"
                    | "answer"
                    | "arrowKey"
                    | "arrowkey"
                    | "ask"
-                   | "beep"
                    | "choose"
                    | "click"
                    | "close"
@@ -1286,15 +1360,10 @@ defmodule Hyperex.Grammar do
                    | "domenu"
                    | "drag"
                    | "enable"
-                   | "enterInField"
-                   | "enterinfield"
-                   | "enterKey"
-                   | "enterkey"
                    | "export"
                    | "find"
                    | "get"
                    | "go"
-                   | "help"
                    | "hide"
                    | "import"
                    | "keyDown"
@@ -1315,10 +1384,6 @@ defmodule Hyperex.Grammar do
                    | "reply"
                    | "request"
                    | "reset"
-                   | "returnInField"
-                   | "returninfield"
-                   | "returnKey"
-                   | "returnkey"
                    | "save"
                    | "select"
                    | "send"
@@ -1327,8 +1392,6 @@ defmodule Hyperex.Grammar do
                    | "sort"
                    | "stop"
                    | "subtract"
-                   | "tabKey"
-                   | "tabkey"
                    | "type"
                    | "unlock"
                    | "ummark"
@@ -1336,9 +1399,18 @@ defmodule Hyperex.Grammar do
                    | "wait"
                    | "write"
 
-                 :command <-
-                   str(:command_name) * :+ * str(ConsumeLine) *
+                 :command_name <-
+                   :zero_arg_command_name
+                   | :zero_or_arg_command_name
+                   | :arg_command_name
+
+                 :arg_command <-
+                   str(:zero_or_arg_command_name | :arg_command_name) * Sp * str(WordsToEol) *
                      fn [args, name | cs] -> [{:command, name, args} | cs] end
+
+                 :zero_arg_command <-
+                   str(:zero_or_arg_command_name | :zero_arg_command_name) *
+                     fn [name | cs] -> [{:command, name, ""} | cs] end
 
                  :date_time_func_name <- "date" | "time"
 
@@ -1536,53 +1608,10 @@ defmodule Hyperex.Grammar do
                        [{:function_call, name, exlist, [user_defined: true]} | rest]
                      end
 
-                 :function_call <- :built_in_func | :user_func
-
-                 :message <-
-                   str(:message_name | :id) * :+ * opt(:expr_list) *
-                     fn cs ->
-                       {exlist, [name | rest]} =
-                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
-                           cs,
-                           [reverse: true]
-                         ])
-
-                       [{:message, name, exlist} | rest]
-                     end
-
-                 :statement <-
-                   (:global
-                    | :return
-                    | :pass
-                    | :exit
-                    | :if
-                    | :repeat
-                    | :command
-                    | :function_call
-                    | :message
-                    | :expr) *
-                     fn [e | cs] -> [{:statement, e} | cs] end
-
-                 :statement_list <-
-                   :statement * star(:+ * +(:+ * Nl) * :+ * :statement) * star(:+ * Nl) *
-                     fn cs ->
-                       {stmnts, rest} =
-                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
-                           cs,
-                           [in: :statement, reverse: true, extract: true]
-                         ])
-
-                       [{:statements, stmnts} | rest]
-                     end
-
-                 :scriptlet <-
-                   star(:+ * Nl) * :+ * :statement_list *
-                     fn [stmnts | _] -> [scriptlet: elem(stmnts, 1)] end
-
-                 :param <- str(:id) * fn [v | cs] -> [{:param, String.downcase(v)} | cs] end
+                 :param <- str(:id) * fn [v | cs] -> [{:param, v} | cs] end
 
                  :handler <-
-                   "on" * :+ * :handler_name * :+ * opt(:parameter_list) * +(:+ * Nl) *
+                   "on" * :+ * :handler_name * :+ * opt(:parameter_list) * +Nl *
                      :+ *
                      opt(:statement_list) * :+ * "end" * :+ * :handler_id *
                      fn cs ->
@@ -1601,13 +1630,13 @@ defmodule Hyperex.Grammar do
                            end
                          end)
 
-                       [{:handler, String.downcase(name), params, stmnts} | rest]
+                       [{:handler, name, params, stmnts} | rest]
                      end
 
                  :function_name <- str(:id) * fn [name | cs] -> [{:function_name, name} | cs] end
 
                  :function_def <-
-                   "function" * :+ * :function_name * :+ * opt(:parameter_list) * +(:+ * Nl) * :+ *
+                   "function" * :+ * :function_name * :+ * opt(:parameter_list) * +Nl * :+ *
                      opt(:statement_list) * :+ * "end" * :+ * :id *
                      fn cs ->
                        {function, rest} =
@@ -1625,25 +1654,27 @@ defmodule Hyperex.Grammar do
                            end
                          end)
 
-                       [{:function, String.downcase(name), params, stmnts} | rest]
+                       [{:function, name, params, stmnts} | rest]
                      end
 
-                 :script_elem <- :handler | :function_def
+                 # Token delimeters
+                 :+ <- opt(Ws)
+                 Sp <- +Ws
 
-                 :script <-
-                   star(:+ * Nl) * :+ * :script_elem * star(+(:+ * Nl) * :+ * :script_elem) *
-                     star(:+ * Nl) *
-                     fn cs ->
-                       {elems, rest} =
-                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
-                           cs,
-                           [in: [:handler, :function], reverse: true]
-                         ])
-
-                       [{:script, elems} | rest]
-                     end
-
-                 :program <- :+ * (:script | :scriptlet) * :+
+                 # Basics
+                 Ws <- " " | "\t"
+                 Eol <- Nl | Eoi
+                 WordsToEol <- star(1 - Eol)
+                 Nl <- opt(Ws) * opt(Comment) * "\n"
+                 Comment <- "--" * star(1 - "\n")
+                 Identifier <- AlphaLower * star(Alpha | Digit)
+                 :id <- NonReserved | Identifier - Reserved
+                 NonReserved <- Reserved * +(Alpha | Digit)
+                 Alpha <- {~c"A"..~c"Z"} | AlphaLower
+                 Digit <- {~c"0"..~c"9"}
+                 AlphaLower <- {~c"a"..~c"z"}
+                 Soi <- "{{"
+                 Eoi <- "}}"
                end)
 
   def peg_script, do: @peg_script
