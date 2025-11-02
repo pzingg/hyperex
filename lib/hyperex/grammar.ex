@@ -4,6 +4,15 @@ defmodule Hyperex.Grammar do
   import Xpeg
 
   @peg_script (peg(:program) do
+                 ## Inlined delimeters
+                 Ws <- " " | "\t"
+                 Soi <- "{{"
+                 Eoi <- "}}"
+                 :+ <- opt(Ws)
+                 Sp <- +Ws
+                 Eol <- Eoi | Nl
+
+                 ## Program, script, scriptlet
                  :program <- Soi * star(Nl) * :+ * (:script | :scriptlet) * :+ * Eoi
 
                  :script <-
@@ -25,6 +34,7 @@ defmodule Hyperex.Grammar do
                    :statement_list *
                      fn [stmnts | _] -> [scriptlet: elem(stmnts, 1)] end
 
+                 ## All the rest
                  :statement_list <-
                    :statement * star(+Nl * :statement) * ((&Eoi) | +Nl) *
                      fn cs ->
@@ -53,7 +63,17 @@ defmodule Hyperex.Grammar do
                    :+ * :statement_kind *
                      fn [e | cs] -> [{:statement, e} | cs] end
 
+                 # Put factor first to avoid collision of negative :float
                  :term_b10 <- :factor | :prefix_b10
+                 :term_b9 <- :term_b10 * star(:+ * :infix_b9)
+                 :term_b8 <- :term_b9 * star(:+ * :infix_b8)
+                 :term_b7 <- :term_b8 * star(:+ * :infix_b7)
+                 :term_b6 <- :term_b7 * star(:+ * :infix_b6)
+                 :term_b5 <- :term_b6 * star(:+ * :infix_b5)
+                 :term_b4 <- :term_b5 * star(:+ * :infix_b4)
+                 :term_b3 <- :term_b4 * star(:+ * :infix_b3)
+                 :term_b2 <- :term_b3 * star(:+ * :infix_b2)
+                 :expr <- :+ * :term_b2 * :+ * star(:+ * :infix_b1)
 
                  :factor <-
                    "(" * :+ * :expr_or_var * :+ * ")"
@@ -88,8 +108,6 @@ defmodule Hyperex.Grammar do
 
                  :expr_list <- :expr_or_var * star(:+ * "," * :+ * :expr_or_var)
 
-                 :expr <- :+ * :term_b2 * :+ * star(:+ * :infix_b1)
-
                  :expr_or_var <- :expr | :variable
 
                  :message_or_var <-
@@ -108,6 +126,684 @@ defmodule Hyperex.Grammar do
                       | :global_system_property
                       | :global_hypercard_property)
 
+                 # Properties
+
+                 :adjective <-
+                   str("abbreviated" | "abbrev" | "abbr" | "long" | "short") *
+                     fn [v | cs] ->
+                       format =
+                         case v do
+                           "long" -> {:format, :long}
+                           "short" -> {:format, :short}
+                           _ -> {:format, :abbrev}
+                         end
+
+                       [format | cs]
+                     end
+
+                 :long_opt <- "long" * fn cs -> [{:format, :long} | cs] end
+
+                 :english_opt <- "english" * fn cs -> [{:format, :english} | cs] end
+
+                 :hypercard_property <-
+                   str("address")
+                   | opt(:long_opt * Sp) * str("version")
+                   | opt(:adjective * Sp) * str("ID" | "id" | "name")
+
+                 :global_hypercard_property <-
+                   :hypercard_property * :+ * opt(opt("of") * :+ * ("HyperCard" | "hypercard")) *
+                     fn cs ->
+                       case cs do
+                         [name, {:format, _} = fmt | rest] ->
+                           [{:global_property, name, [fmt]} | rest]
+
+                         [name | rest] ->
+                           [{:global_property, name, []} | rest]
+                       end
+                     end
+
+                 :global_system_property <-
+                   str(:global_property_name) *
+                     fn [name | cs] -> [{:global_property, name, []} | cs] end
+
+                 :object_property_name <-
+                   :stack_prop_name
+                   | :background_prop_name
+                   | :card_prop_name
+                   | :field_prop_name
+                   | :button_prop_name
+                   | :rectangle_prop_name
+                   | :painting_prop_name
+                   | :window_prop_name
+                   | :menu_prop_name
+                   | :watcher_prop_name
+
+                 :object_property <-
+                   str(:object_property_name)
+                   | opt(:english_opt * Sp) * str("name")
+                   | opt(:adjective * Sp) * str("ID" | "id" | "name")
+
+                 :object_property_phrase <-
+                   :object_property * Sp * "of" * Sp * :expr_or_var *
+                     fn cs ->
+                       case cs do
+                         [obj, name, {:format, _} = fmt | rest] ->
+                           [{:object_property, name, obj, [fmt]} | rest]
+
+                         [obj, name | rest] ->
+                           [{:object_property, name, obj, []} | rest]
+                       end
+                     end
+
+                 # Factor - literals
+                 :float <-
+                   float(
+                     opt("-") *
+                       (opt("0") * "." * +Digit | +Digit * "." * star(Digit)) *
+                       opt(("e" | "E") * opt("-" | "+") * +Digit)
+                   ) * fn [v | cs] -> [{:float, v} | cs] end
+
+                 :integer <-
+                   int("0" | opt("-") * {~c"1"..~c"9"} * star(Digit)) *
+                     fn [v | cs] -> [{:integer, v} | cs] end
+
+                 :single_quoted <-
+                   str(star("'" * "'" | 1 - "'")) *
+                     fn [s | cs] ->
+                       [{:string_lit, String.replace(s, "''", "'")} | cs]
+                     end
+
+                 :double_quoted <-
+                   str(star("\"" * "\"" | 1 - "\"")) *
+                     fn [s | cs] ->
+                       [{:string_lit, String.replace(s, "\"\"", "\"")} | cs]
+                     end
+
+                 :string_lit <- "'" * :single_quoted * "'" | "\"" * :double_quoted * "\""
+
+                 # Factor - containers
+
+                 :container_special <-
+                   str("It" | "it" | "each" | "target")
+                   | opt("the") * :+ * str("selection") *
+                       fn [v | cs] ->
+                         cont =
+                           case v do
+                             "each" -> {:container_each}
+                             "target" -> {:container_target}
+                             "selection" -> {:container_selection}
+                             _ -> {:container_it}
+                           end
+
+                         [cont | cs]
+                       end
+
+                 :message_box <-
+                   opt("the" * Ws) * ("message" | "msg") * Ws * opt("window" | "box") *
+                     fn cs -> [{:container_message_box} | cs] end
+
+                 :menu <-
+                   "menu" * Ws * :expr
+                   | :position * Ws * "menu" *
+                       fn [mid | cs] -> [{:menu, mid} | cs] end
+
+                 :menu_item <-
+                   ("menuItem" | "menuitem") * Ws * :expr * :+ * "of" * Ws * :menu
+                   | :position * Ws * ("menuItem" | "menuitem") * Ws * "of" * Ws * :menu *
+                       fn [{:menu, m}, mid | cs] -> [{:menu_item, mid, m} | cs] end
+
+                 # Parts
+                 :by_position <-
+                   str(:position) *
+                     fn [v | cs] -> [{:by_position, v} | cs] end
+
+                 :by_id <-
+                   "id" * Ws * :expr *
+                     fn [ex | cs] -> [{:by_id, ex} | cs] end
+
+                 :by_number <-
+                   :expr *
+                     fn [ex | cs] -> [{:by_number, ex} | cs] end
+
+                 :by_id_or_number <- :by_id | :by_number
+
+                 :card_part_part <-
+                   :card * Ws * "part" * Ws * :expr *
+                     fn [ex | cs] -> [{:card_part, ex} | cs] end
+
+                 :background_part_part <-
+                   :background * Ws * "part" * Ws * :expr *
+                     fn [ex | cs] -> [{:background_part, ex} | cs] end
+
+                 :named_stack <-
+                   "stack" * Ws * :expr *
+                     fn [ex | cs] -> [{:stack, ex} | cs] end
+
+                 :this_stack <-
+                   opt("this" * Ws) * "stack" *
+                     fn cs -> [{:stack, :this} | cs] end
+
+                 :stack_part <- :named_stack | :this_stack
+                 :of_background_or_stack <- :of * Ws * (:background_part | :stack_part)
+                 :of_stack <- :of * Ws * :stack_part
+
+                 :specific_background <-
+                   (:by_position * Ws * :background
+                    | :background * Ws * :by_id_or_number) *
+                     fn [ex | cs] -> [{:background, ex} | cs] end
+
+                 :this_background <-
+                   opt("this" * Ws) * :background *
+                     fn cs -> [{:background, :this} | cs] end
+
+                 :background_part <-
+                   (:specific_background | :this_background) * opt(Ws * :of_stack)
+
+                 :specific_card <-
+                   (:by_position * Ws * :card
+                    | :card * Ws * :by_id_or_number) *
+                     fn [ex | cs] -> [{:card, ex} | cs] end
+
+                 :this_card <-
+                   opt("this" * Ws) * :card *
+                     fn cs -> [{:card, :this} | cs] end
+
+                 :card_part <-
+                   (:specific_card | :this_card) * opt(Ws * :of_stack)
+
+                 :of_card <- :of * Ws * :card_part
+
+                 :background_button <-
+                   :background * Ws * :button * fn cs -> [:background_button | cs] end
+
+                 :card_button <-
+                   opt(:card * Ws) * :button * fn cs -> [:card_button | cs] end
+
+                 :background_or_card_button <- :background_button | :card_button
+
+                 :button_by_position <-
+                   :by_position * Ws * :background_or_card_button *
+                     fn [type, pos | cs] ->
+                       [{:button, type, pos} | cs]
+                     end
+
+                 :button_by_id_or_number <-
+                   :background_or_card_button * Ws * :by_id_or_number *
+                     fn [id, type | cs] ->
+                       [{:button, type, id} | cs]
+                     end
+
+                 :button_part <-
+                   (:button_by_position | :button_by_id_or_number) * opt(Ws * :of_card)
+
+                 :card_field <-
+                   :card * Ws * :field * fn cs -> [:card_field | cs] end
+
+                 :background_field <-
+                   opt(:background * Ws) * :field * fn cs -> [:background_field | cs] end
+
+                 :background_or_card_field <- :card_field | :background_field
+
+                 :field_by_position <-
+                   :by_position * Ws * :background_or_card_field *
+                     fn [type, pos | cs] ->
+                       [{:field, type, pos} | cs]
+                     end
+
+                 :field_by_id_or_number <-
+                   :background_or_card_field * Ws * :by_id_or_number *
+                     fn [id, type | cs] ->
+                       [{:field, type, id} | cs]
+                     end
+
+                 :field_part <- (:field_by_position | :field_by_id_or_number) * opt(Ws * :of_card)
+
+                 :id_window <-
+                   "window" * opt(Ws * "id") * Ws * :expr *
+                     fn [ex | cs] -> [{:id_window, ex} | cs] end
+
+                 :card_window <-
+                   :card * Ws * "window" *
+                     fn cs -> [:card_window | cs] end
+
+                 :system_window <-
+                   (str("tool" | "pattern") * Ws * "window"
+                    | str("message" | "variable") * Ws * "watcher") *
+                     fn [name | cs] -> [{:system_window, name} | cs] end
+
+                 :window_part <- :id_window | opt("the" * Ws) * (:card_window | :system_window)
+
+                 :me <- "me" * fn cs -> [:me | cs] end
+
+                 # Order is important, e.g. "opt(:card) :button" before ":card :expr"
+                 :part <-
+                   :me
+                   | :stack_part
+                   | :button_part
+                   | :field_part
+                   | :window_part
+                   | :card_part_part
+                   | :card_part
+                   | :background_part_part
+                   | :background_part
+
+                 # Operators, lowest to highest binding power
+                 :infix_b1 <-
+                   "or" * :+ * :expr *
+                     fn [b, a | cs] ->
+                       [{:or, [a, b]} | cs]
+                     end
+
+                 :infix_b2 <-
+                   "and" * :+ * :term_b2 *
+                     fn [b, a | cs] ->
+                       [{:and, [a, b]} | cs]
+                     end
+
+                 # equality
+                 :op_not_equals <-
+                   ("is" * Ws * "not" | "<>" | "≠") * fn cs -> [:not_equals | cs] end
+
+                 :op_equals <- ("=" | "is") * fn cs -> [:equals | cs] end
+
+                 :infix_b3 <-
+                   (:op_not_equals | :op_equals) * :+ * :term_b3 *
+                     fn [b, op, a | cs] ->
+                       [{op, [a, b]} | cs]
+                     end
+
+                 # comparisons
+                 :op_not_in <- "is" * Ws * "not" * Ws * "in" * fn cs -> [:not_in | cs] end
+
+                 :op_not_type <-
+                   "is" * Ws * "not" * Ws * ("an" | "a") * fn cs -> [:not_type | cs] end
+
+                 :op_in <- "is" * Ws * "in" * fn cs -> [:in | cs] end
+                 :op_is_type <- "is" * Ws * ("an" | "a") * fn cs -> [:is_type | cs] end
+
+                 :infix_b4 <-
+                   str(
+                     "<="
+                     | "≤"
+                     | ">="
+                     | "≥"
+                     | "<"
+                     | ">"
+                     | "contains"
+                     | :op_not_in
+                     | :op_not_type
+                     | :op_in
+                     | :op_is_type
+                   ) * :+ * :term_b4 *
+                     fn [b, op, a | cs] ->
+                       case op do
+                         ">" -> [{:gt, [a, b]} | cs]
+                         "≥" -> [{:gte, [a, b]} | cs]
+                         ">=" -> [{:gte, [a, b]} | cs]
+                         "<" -> [{:lt, [a, b]} | cs]
+                         "≤" -> [{:gte, [a, b]} | cs]
+                         "<=" -> [{:gte, [a, b]} | cs]
+                         "contains" -> [{:contains, [a, b]} | cs]
+                         _ -> [{op, [a, b]} | cs]
+                       end
+                     end
+
+                 # concat, concat_ws
+                 :infix_b5 <-
+                   str("&&" | "&") * :+ * :term_b5 *
+                     fn [b, op, a | cs] ->
+                       case op do
+                         "&&" -> [{:concat_ws, [a, b]} | cs]
+                         "&" -> [{:concat, [a, b]} | cs]
+                       end
+                     end
+
+                 # add, sub
+                 :infix_b6 <-
+                   str({~c"+", ~c"-"}) * :+ * :term_b6 *
+                     fn [b, op, a | cs] ->
+                       case op do
+                         "+" -> [{:add, [a, b]} | cs]
+                         "-" -> [{:sub, [a, b]} | cs]
+                       end
+                     end
+
+                 # mul, div, mod, div_trunc
+                 :infix_b7 <-
+                   str("*" | "/" | "div" | "mod") * :+ * :term_b7 *
+                     fn [b, op, a | cs] ->
+                       case op do
+                         "*" -> [{:mul, [a, b]} | cs]
+                         "/" -> [{:div, [a, b]} | cs]
+                         "mod" -> [{:mod, [a, b]} | cs]
+                         "div" -> [{:div_trunc, [a, b]} | cs]
+                       end
+                     end
+
+                 # pow
+                 :infix_b8 <-
+                   str("^") * :+ * :term_b8 *
+                     fn [b, _op, a | cs] -> [{:pow, [a, b]} | cs] end
+
+                 # within
+                 :op_not_within <-
+                   "is" * Ws * "not" * Ws * "within" * fn cs -> [:not_within | cs] end
+
+                 :op_within <- "is" * Ws * "within" * fn cs -> [:within | cs] end
+
+                 :infix_b9 <-
+                   (:op_not_within | :op_within) * :+ * :term_b9 *
+                     fn [b, op, a | cs] ->
+                       [{op, [a, b]} | cs]
+                     end
+
+                 # exists, not, negate
+                 :op_not_exists <-
+                   "there" * Ws * "is" * Ws * ("not" * opt(Ws * ("an" | "a")) | "no") *
+                     fn cs -> [:not_exists | cs] end
+
+                 :op_exists <-
+                   "there" * Ws * "is" * opt(Ws * ("an" | "a")) * fn cs -> [:exists | cs] end
+
+                 :prefix_b10 <-
+                   (str("-" | "not") | :op_not_exists | :op_exists) * :+ * :term_b10 *
+                     fn [x, op | cs] ->
+                       case op do
+                         "-" -> [{:negate, [x]} | cs]
+                         "not" -> [{:not, [x]} | cs]
+                         _ -> [{op, [x]} | cs]
+                       end
+                     end
+
+                 :parameter_list <-
+                   :param * star(:+ * "," * :+ * :param) *
+                     fn cs ->
+                       {params, rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
+                           cs,
+                           [in: :param, reverse: true, extract: true]
+                         ])
+
+                       [{:params, params} | rest]
+                     end
+
+                 :global <-
+                   "global" * Ws * :parameter_list *
+                     fn cs ->
+                       {params, rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
+                           cs,
+                           [in: :params]
+                         ])
+
+                       case params do
+                         [{:params, params}] -> [{:global, params} | rest]
+                         [] -> [{:global, []} | rest]
+                       end
+                     end
+
+                 :return <-
+                   "return" * opt(Ws * :expr) *
+                     fn cs -> [{:return, cs}] end
+
+                 :handler_id <- :command_name | :message_name | :id
+
+                 :handler_name <-
+                   str(:handler_id) *
+                     fn [name | cs] -> [{:handler_name, name} | cs] end
+
+                 :pass <-
+                   "pass" * Ws * :handler_name *
+                     fn [{:handler_name, name} | cs] -> [{:pass, name} | cs] end
+
+                 :exit_to_hypercard <-
+                   "to" * Ws * ("HyperCard" | "hypercard") *
+                     fn cs -> [:exit_to_hypercard | cs] end
+
+                 :exit_repeat <- "repeat" * fn cs -> [:exit_repeat | cs] end
+
+                 :exit_handler <-
+                   :handler_name *
+                     fn [{:handler_name, name} | cs] -> [{:exit_handler, name} | cs] end
+
+                 :exit <- "exit" * Ws * (:exit_to_hypercard | :exit_repeat | :exit_handler)
+
+                 :end_if <- "end" * Ws * "if"
+                 :else_single <- Ws * :statement * opt(+Nl * :+ * :end_if)
+                 :else_multi <- +Nl * :+ * opt(:statement_list) * :+ * :end_if
+                 :else <- "else" * (:else_single | :else_multi)
+
+                 :then_multiline <-
+                   +Nl * :+ * :statement_list * star(Nl) * :+ * (:else | :end_if)
+
+                 :then_single_line <- Ws * :statement * opt(Nl) * :+ * opt(:else)
+                 :then <- "then" * (:then_multiline | :then_single_line)
+
+                 :if <-
+                   "if" * Ws * :expr * opt(Nl) * :+ * :then *
+                     fn cs ->
+                       {stmnts, [test | rest]} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
+                           cs,
+                           [in: [:statement, :statements]]
+                         ])
+
+                       case stmnts do
+                         [{:statement, if_path}] ->
+                           [{:if, test, [if_path], []} | rest]
+
+                         [{:statements, if_path}] ->
+                           [{:if, test, if_path, []} | rest]
+
+                         [{:statement, else_path}, {:statement, if_path}] ->
+                           [{:if, test, [if_path], [else_path]} | rest]
+
+                         [{:statements, else_path}, {:statements, if_path}] ->
+                           [{:if, test, if_path, else_path} | rest]
+                       end
+                     end
+
+                 :repeat_until <-
+                   "until" * Ws * :expr * fn [ex | cs] -> [{:repeat_until, [], ex} | cs] end
+
+                 :repeat_while <-
+                   "while" * Ws * :expr * fn [ex | cs] -> [{:repeat_while, [], ex} | cs] end
+
+                 :repeat_with_desc <-
+                   str(:id) * :+ * "=" * :+ * :expr * :+ * "down" * Ws * "to" * Ws * :expr *
+                     fn [to, from, var | cs] -> [{:repeat_with_desc, [], var, from, to} | cs] end
+
+                 :repeat_with_asc <-
+                   str(:id) * :+ * "=" * :+ * :expr * :+ * "to" * Ws * :expr *
+                     fn [to, from, var | cs] -> [{:repeat_with_asc, [], var, from, to} | cs] end
+
+                 :repeat_with <- "with" * Ws * (:repeat_with_desc | :repeat_with_asc)
+
+                 :repeat_forever <- "forever" * fn cs -> [{:repeat_forever, []} | cs] end
+
+                 :repeat_count <-
+                   opt("for") * Ws * :expr * :+ * opt("times") *
+                     fn [ex | cs] -> [{:repeat_count, [], ex} | cs] end
+
+                 :repeat_range <-
+                   :repeat_until
+                   | :repeat_while
+                   | :repeat_with
+                   | :repeat_forever
+                   | :repeat_count
+
+                 :repeat <-
+                   "repeat" * Ws * :repeat_range * +Nl * :+ * :statement_list * :+ *
+                     "end" * Ws * "repeat" *
+                     fn [{:statements, stmnts}, rep | cs] ->
+                       rep =
+                         case rep do
+                           {:repeat_until, _, ex} ->
+                             {:repeat_until, stmnts, ex}
+
+                           {:repeat_while, _, ex} ->
+                             {:repeat_while, stmnts, ex}
+
+                           {:repeat_with_desc, _, var, from, to} ->
+                             {:repeat_with_desc, stmnts, var, from, to}
+
+                           {:repeat_with_asc, _, var, from, to} ->
+                             {:repeat_with_asc, stmnts, var, from, to}
+
+                           {:repeat_forever, _} ->
+                             {:repeat_forever, stmnts}
+
+                           {:repeat_count, _, ex} ->
+                             {:repeat_count, stmnts, ex}
+                         end
+
+                       [rep | cs]
+                     end
+
+                 :command_name <-
+                   :zero_arg_command_name
+                   | :zero_or_arg_command_name
+                   | :arg_command_name
+
+                 :arg_command <-
+                   str(:zero_or_arg_command_name | :arg_command_name) * Sp * str(WordsToEol) *
+                     fn [args, name | cs] -> [{:command, name, args} | cs] end
+
+                 :zero_arg_command <-
+                   str(:zero_or_arg_command_name | :zero_arg_command_name) *
+                     fn [name | cs] -> [{:command, name, ""} | cs] end
+
+                 :the_formatted_func <-
+                   "the" * opt(Ws * :adjective) * Ws * str(:date_time_func_name | "target") *
+                     fn [name | cs] ->
+                       name =
+                         if name == "target" do
+                           "the_target"
+                         else
+                           name
+                         end
+
+                       case cs do
+                         [{:format, _} = fmt | rest] ->
+                           [{:function_call, name, [], [fmt]} | rest]
+
+                         _ ->
+                           [{:function_call, name, [], []} | cs]
+                       end
+                     end
+
+                 :target_func <- "target" * fn cs -> [{:function_call, "target", [], []} | cs] end
+
+                 :number_func <-
+                   opt("the") * Ws * "number" * Ws * "of" * Ws * str(1 - Nl) *
+                     fn [obj | cs] -> [{:function_call, "number", [obj], []} | cs] end
+
+                 :zero_arg_func <-
+                   str(:zero_arg_func_name) *
+                     fn [name | cs] -> [{:function_call, name, [], []} | cs] end
+
+                 :single_arg_func <-
+                   str(:single_arg_func_name) *
+                     fn [name | cs] -> [{:function_call, name, [], []} | cs] end
+
+                 :the_single_arg_func_of <-
+                   "the" * Ws * :single_arg_func * Ws * "of" * Ws * :expr *
+                     fn [ex, {:function_call, name, _, opts} | cs] ->
+                       [{:function_call, name, [ex], opts} | cs]
+                     end
+
+                 :single_arg_func_parens <-
+                   :single_arg_func * :+ * "(" * :+ * :expr * :+ * ")" *
+                     fn [ex, {:function_call, name, _, opts} | cs] ->
+                       [{:function_call, name, [ex], opts} | cs]
+                     end
+
+                 :list_arg_func <-
+                   str(:two_arg_func_name | :list_arg_func_name) * :+ *
+                     "(" * :+ * :expr_list * :+ * ")" *
+                     fn cs ->
+                       {exlist, [name | rest]} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
+                           cs,
+                           [reverse: true]
+                         ])
+
+                       [{:function_call, name, exlist, []} | rest]
+                     end
+
+                 :built_in_func <-
+                   :the_formatted_func
+                   | :the_single_arg_func_of
+                   | "the" * Ws * :zero_arg_func
+                   | :target_func
+                   | :number_func
+                   | :zero_arg_func * :+ * "(" * :+ * ")"
+                   | :single_arg_func_parens
+                   | :list_arg_func
+
+                 :user_func <-
+                   str(:id) * :+ * "(" * :+ * opt(:expr_list) * :+ * ")" *
+                     fn cs ->
+                       {exlist, [name | rest]} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
+                           cs,
+                           [reverse: true]
+                         ])
+
+                       [{:function_call, name, exlist, [user_defined: true]} | rest]
+                     end
+
+                 :param <- str(:id) * fn [v | cs] -> [{:param, v} | cs] end
+
+                 :end_handler <- "end" * Ws * :handler_id
+
+                 :handler <-
+                   "on" * Ws * :handler_name * opt(:+ * :parameter_list) * +Nl *
+                     :+ * opt(:statement_list) * :+ * :end_handler *
+                     fn cs ->
+                       {handler, rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
+                           cs,
+                           [in: [:params, :statements, :handler_name]]
+                         ])
+
+                       {name, params, stmnts} =
+                         Enum.reduce(handler, {"", [], []}, fn elem, {n, p, s} ->
+                           case elem do
+                             {:handler_name, name} -> {name, p, s}
+                             {:params, params} -> {n, params, s}
+                             {:statements, statement_list} -> {n, p, statement_list}
+                           end
+                         end)
+
+                       [{:handler, name, params, stmnts} | rest]
+                     end
+
+                 :function_name <- str(:id) * fn [name | cs] -> [{:function_name, name} | cs] end
+
+                 :function_def <-
+                   "function" * Ws * :function_name * :+ * opt(:parameter_list) * +Nl * :+ *
+                     opt(:statement_list) * :+ * "end" * Ws * :id *
+                     fn cs ->
+                       {function, rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
+                           cs,
+                           [in: [:params, :statements, :function_name]]
+                         ])
+
+                       {name, params, stmnts} =
+                         Enum.reduce(function, {"", [], []}, fn elem, {n, p, s} ->
+                           case elem do
+                             {:function_name, name} -> {name, p, s}
+                             {:params, params} -> {n, params, s}
+                             {:statements, statement_list} -> {n, p, statement_list}
+                           end
+                         end)
+
+                       [{:function, name, params, stmnts} | rest]
+                     end
+
+                 ## HyperTalk vocabulary
                  Reserved <-
                    "else"
                    | "end"
@@ -149,86 +845,199 @@ defmodule Hyperex.Grammar do
                    | "is"
                    | "not"
 
-                 # HyperTalk vocabulary
-                 :true_false <- "true" | "false"
-                 :of <- "of" | "in"
-                 :button <- "buttons" | "button" | "btns" | "btn"
-                 :field <- "fields" | "field" | "flds" | "fld"
-                 :card <- "card" | "cd"
-                 :background <- "background" | "bkgnd"
-                 :characters <- "characters" | "chars"
-                 :character <- "character" | "char"
-                 :chunk_type <- :characters | "words" | "lines" | "items"
+                 ## Message names
+                 :message_name <-
+                   "appleEvent"
+                   | "appleevent"
+                   | "arrowKey"
+                   | "arrowkey"
+                   | "closeBackground"
+                   | "closebackground"
+                   | "closeCard"
+                   | "closecard"
+                   | "closeField"
+                   | "closefield"
+                   | "closePalette"
+                   | "closepalette"
+                   | "closePicture"
+                   | "closepicture"
+                   | "closeStack"
+                   | "closestack"
+                   | "close"
+                   | "commandKeyDown"
+                   | "commandkeydown"
+                   | "controlKey"
+                   | "controlkey"
+                   | "deleteBackground"
+                   | "deletebackground"
+                   | "deleteButton"
+                   | "deletebutton"
+                   | "deleteCard"
+                   | "deletecard"
+                   | "deleteField"
+                   | "deletefield"
+                   | "deleteStack"
+                   | "deletestack"
+                   | "doMenu"
+                   | "domenu"
+                   | "enterInField"
+                   | "enterinfield"
+                   | "enterKey"
+                   | "enterkey"
+                   | "errorDialog"
+                   | "errordialog"
+                   | "exitField"
+                   | "exitfield"
+                   | "functionKey"
+                   | "functionkey"
+                   | "help"
+                   | "hide"
+                   | "idle"
+                   | "keyDown"
+                   | "keydown"
+                   | "mouseDoubleClick"
+                   | "mousedoubleclick"
+                   | "mouseDownInPicture"
+                   | "mousedowninpicture"
+                   | "mouseDown"
+                   | "mousedown"
+                   | "mouseEnter"
+                   | "mouseenter"
+                   | "mouseLeave"
+                   | "mouseleave"
+                   | "mouseStillDown"
+                   | "mousestilldown"
+                   | "mouseUpInPicture"
+                   | "mouseupinpicture"
+                   | "mouseUp"
+                   | "mouseup"
+                   | "mouseWithin"
+                   | "mousewithin"
+                   | "moveWindow"
+                   | "movewindow"
+                   | "newBackground"
+                   | "newbackground"
+                   | "newButton"
+                   | "newbutton"
+                   | "newCard"
+                   | "newcard"
+                   | "newField"
+                   | "newfield"
+                   | "newStack"
+                   | "newstack"
+                   | "openBackground"
+                   | "openbackground"
+                   | "openCard"
+                   | "opencard"
+                   | "openField"
+                   | "openfield"
+                   | "openPalette"
+                   | "openpalette"
+                   | "openPicture"
+                   | "openpicture"
+                   | "openStack"
+                   | "openstack"
+                   | "quit"
+                   | "resume"
+                   | "resumeStack"
+                   | "resumestack"
+                   | "returnInField"
+                   | "returninfield"
+                   | "returnKey"
+                   | "returnkey"
+                   | "show"
+                   | "sizeWindow"
+                   | "sizewindow"
+                   | "startUp"
+                   | "startup"
+                   | "suspendStack"
+                   | "suspendstack"
+                   | "suspend"
+                   | "tabKey"
+                   | "tabkey"
 
-                 :cardinal_value <-
-                   "zero"
-                   | "one"
-                   | "two"
-                   | "three"
-                   | "four"
-                   | "five"
-                   | "six"
-                   | "seven"
-                   | "eight"
-                   | "nine"
-                   | "ten"
+                 ## Command names
+                 :zero_arg_command_name <-
+                   "enterInField"
+                   | "enterinfield"
+                   | "enterKey"
+                   | "enterkey"
+                   | "help"
+                   | "returnInField"
+                   | "returninfield"
+                   | "returnKey"
+                   | "returnkey"
+                   | "tabKey"
+                   | "tabkey"
 
-                 :ordinal_value <-
-                   "first"
-                   | "second"
-                   | "third"
-                   | "fourth"
-                   | "fifth"
-                   | "sixth"
-                   | "seventh"
-                   | "eighth"
-                   | "ninth"
-                   | "tenth"
-                   | "middle"
-                   | "mid"
-                   | "last"
-                   | "any"
+                 :zero_or_arg_command_name <-
+                   "beep"
 
-                 :position <-
-                   "this" | opt("the") * :+ * (:ordinal_value | "next" | "previous" | "prev")
+                 :arg_command_name <-
+                   "add"
+                   | "answer"
+                   | "arrowKey"
+                   | "arrowkey"
+                   | "ask"
+                   | "choose"
+                   | "click"
+                   | "close"
+                   | "commandKeyDown"
+                   | "commandkeyDown"
+                   | "controlKey"
+                   | "controlkey"
+                   | "convert"
+                   | "create"
+                   | "debug"
+                   | "delete"
+                   | "dial"
+                   | "disable"
+                   | "divide"
+                   | "do"
+                   | "doMenu"
+                   | "domenu"
+                   | "drag"
+                   | "enable"
+                   | "export"
+                   | "find"
+                   | "get"
+                   | "go"
+                   | "hide"
+                   | "import"
+                   | "keyDown"
+                   | "keydown"
+                   | "lock"
+                   | "mark"
+                   | "multiply"
+                   | "next"
+                   | "open"
+                   | "palette"
+                   | "picture"
+                   | "play"
+                   | "pop"
+                   | "print"
+                   | "push"
+                   | "put"
+                   | "read"
+                   | "reply"
+                   | "request"
+                   | "reset"
+                   | "save"
+                   | "select"
+                   | "send"
+                   | "set"
+                   | "show"
+                   | "sort"
+                   | "stop"
+                   | "subtract"
+                   | "type"
+                   | "unlock"
+                   | "ummark"
+                   | "visual"
+                   | "wait"
+                   | "write"
 
-                 :constant <-
-                   str(
-                     :true_false
-                     | :cardinal_value
-                     | "empty"
-                     | "pi"
-                     | "quote"
-                     | "return"
-                     | "space"
-                     | "tab"
-                     | "formFeed"
-                     | "formfeed"
-                     | "lineFeed"
-                     | "linefeed"
-                     | "comma"
-                     | "colon"
-                   ) * fn [v | cs] -> [{:constant, v} | cs] end
-
-                 # Properties
-
-                 :adjective <-
-                   str("abbreviated" | "abbrev" | "abbr" | "long" | "short") *
-                     fn [v | cs] ->
-                       format =
-                         case v do
-                           "long" -> {:format, :long}
-                           "short" -> {:format, :short}
-                           _ -> {:format, :abbrev}
-                         end
-
-                       [format | cs]
-                     end
-
-                 :long_opt <- "long" * fn cs -> [{:format, :long} | cs] end
-
-                 :english_opt <- "english" * fn cs -> [{:format, :english} | cs] end
-
+                 ## Property names
                  :property_name <-
                    "address"
                    | "autohilite"
@@ -417,24 +1226,7 @@ defmodule Hyperex.Grammar do
                    | "zoom"
                    | "zoomed"
 
-                 :hypercard_property <-
-                   str("address")
-                   | opt(:long_opt * Sp) * str("version")
-                   | opt(:adjective * Sp) * str("ID" | "id" | "name")
-
-                 :global_hypercard_property <-
-                   :hypercard_property * :+ * opt(opt("of") * :+ * ("HyperCard" | "hypercard")) *
-                     fn cs ->
-                       case cs do
-                         [name, {:format, _} = fmt | rest] ->
-                           [{:global_property, name, [fmt]} | rest]
-
-                         [name | rest] ->
-                           [{:global_property, name, []} | rest]
-                       end
-                     end
-
-                 :global_property <-
+                 :global_property_name <-
                    "blindTyping"
                    | "blindtyping"
                    | "cursor"
@@ -501,26 +1293,7 @@ defmodule Hyperex.Grammar do
                    | "variableWatcher"
                    | "variablewatcher"
 
-                 :global_system_property <-
-                   str(:global_property) *
-                     fn [name | cs] -> [{:global_property, name, []} | cs] end
-
-                 :id_property <-
-                   "number"
-
-                 :text_property <-
-                   "textAlign"
-                   | "textalign"
-                   | "textFont"
-                   | "textfont"
-                   | "textHeight"
-                   | "textheight"
-                   | "textSize"
-                   | "textsize"
-                   | "textStyle"
-                   | "textstyle"
-
-                 :stack_property <-
+                 :stack_prop_name <-
                    "cantAbort"
                    | "cantabort"
                    | "cantDelete"
@@ -539,7 +1312,7 @@ defmodule Hyperex.Grammar do
                    | "size"
                    | "version"
 
-                 :background_property <-
+                 :background_prop_name <-
                    "cantDelete"
                    | "cantdelete"
                    | "dontSearch"
@@ -549,9 +1322,9 @@ defmodule Hyperex.Grammar do
                    | "scriptinglanguage"
                    | "showPict"
                    | "showpict"
-                   | :id_property
+                   | :id_prop_name
 
-                 :card_property <-
+                 :card_prop_name <-
                    "cantDelete"
                    | "cantdelete"
                    | "dontSearch"
@@ -565,9 +1338,9 @@ defmodule Hyperex.Grammar do
                    | "scriptinglanguage"
                    | "showPict"
                    | "showpict"
-                   | :id_property
+                   | :id_prop_name
 
-                 :field_property <-
+                 :field_prop_name <-
                    "autoSelect"
                    | "autoselect"
                    | "autoTab"
@@ -600,10 +1373,10 @@ defmodule Hyperex.Grammar do
                    | "visible"
                    | "wideMargins"
                    | "widemargins"
-                   | :id_property
-                   | :text_property
+                   | :id_prop_name
+                   | :text_prop_name
 
-                 :button_property <-
+                 :button_prop_name <-
                    "autoHilite"
                    | "autohilite"
                    | "enabled"
@@ -629,10 +1402,10 @@ defmodule Hyperex.Grammar do
                    | "titleWidth"
                    | "titlewidth"
                    | "visible"
-                   | :id_property
-                   | :text_property
+                   | :id_prop_name
+                   | :text_prop_name
 
-                 :rectangle_property <-
+                 :rectangle_prop_name <-
                    "bottomRight"
                    | "bottomright"
                    | "bottom"
@@ -644,7 +1417,7 @@ defmodule Hyperex.Grammar do
                    | "top"
                    | "width"
 
-                 :painting_property <-
+                 :painting_prop_name <-
                    "brush"
                    | "centered"
                    | "filled"
@@ -657,18 +1430,9 @@ defmodule Hyperex.Grammar do
                    | "pattern"
                    | "polySides"
                    | "polysides"
-                   | :text_property
+                   | :text_prop_name
 
-                 :picture_window_property <-
-                   "globalRect"
-                   | "globalrect"
-                   | "globalLoc"
-                   | "globalloc"
-                   | "zoom"
-                   | "scale"
-                   | "dithering"
-
-                 :window_property <-
+                 :window_prop_name <-
                    "location"
                    | "loc"
                    | "owner"
@@ -677,10 +1441,19 @@ defmodule Hyperex.Grammar do
                    | "scroll"
                    | "visible"
                    | "zoomed"
-                   | :picture_window_property
-                   | :id_property
+                   | :picture_window_prop_name
+                   | :id_prop_name
 
-                 :menu_property <-
+                 :picture_window_prop_name <-
+                   "globalRect"
+                   | "globalrect"
+                   | "globalLoc"
+                   | "globalloc"
+                   | "zoom"
+                   | "scale"
+                   | "dithering"
+
+                 :menu_prop_name <-
                    "checkMark"
                    | "checkmark"
                    | "commmandChar"
@@ -693,7 +1466,7 @@ defmodule Hyperex.Grammar do
                    | "textStyle"
                    | "textStyle"
 
-                 :watcher_property <-
+                 :watcher_prop_name <-
                    "hBarLoc"
                    | "hbarloc"
                    | "hideIdle"
@@ -705,713 +1478,22 @@ defmodule Hyperex.Grammar do
                    | "vBarLoc"
                    | "vBarloc"
 
-                 :object_property_name <-
-                   :stack_property
-                   | :background_property
-                   | :card_property
-                   | :field_property
-                   | :button_property
-                   | :rectangle_property
-                   | :painting_property
-                   | :window_property
-                   | :menu_property
-                   | :watcher_property
-
-                 :object_property <-
-                   str(:object_property_name)
-                   | opt(:english_opt * Sp) * str("name")
-                   | opt(:adjective * Sp) * str("ID" | "id" | "name")
-
-                 :object_property_phrase <-
-                   :object_property * Sp * "of" * Sp * :expr_or_var *
-                     fn cs ->
-                       case cs do
-                         [obj, name, {:format, _} = fmt | rest] ->
-                           [{:object_property, name, obj, [fmt]} | rest]
-
-                         [obj, name | rest] ->
-                           [{:object_property, name, obj, []} | rest]
-                       end
-                     end
-
-                 # Factor - literals
-                 :float <-
-                   float(
-                     opt("-") *
-                       (opt("0") * "." * +Digit | +Digit * "." * star(Digit)) *
-                       opt(("e" | "E") * opt("-" | "+") * +Digit)
-                   ) * fn [v | cs] -> [{:float, v} | cs] end
-
-                 :integer <-
-                   int("0" | opt("-") * {~c"1"..~c"9"} * star(Digit)) *
-                     fn [v | cs] -> [{:integer, v} | cs] end
-
-                 :single_quoted <-
-                   str(star("'" * "'" | 1 - "'")) *
-                     fn [s | cs] ->
-                       [{:string_lit, String.replace(s, "''", "'")} | cs]
-                     end
-
-                 :double_quoted <-
-                   str(star("\"" * "\"" | 1 - "\"")) *
-                     fn [s | cs] ->
-                       [{:string_lit, String.replace(s, "\"\"", "\"")} | cs]
-                     end
-
-                 :string_lit <- "'" * :single_quoted * "'" | "\"" * :double_quoted * "\""
-
-                 # Factor - containers
-
-                 :container_special <-
-                   str("It" | "it" | "each" | "target")
-                   | opt("the") * :+ * str("selection") *
-                       fn [v | cs] ->
-                         cont =
-                           case v do
-                             "each" -> {:container_each}
-                             "target" -> {:container_target}
-                             "selection" -> {:container_selection}
-                             _ -> {:container_it}
-                           end
-
-                         [cont | cs]
-                       end
-
-                 :message_box <-
-                   opt("the") * :+ * ("message" | "msg") * :+ * opt("window" | "box") *
-                     fn cs -> [{:container_message_box} | cs] end
-
-                 :menu <-
-                   "menu" * :+ * :expr
-                   | :position * :+ * "menu" *
-                       fn [mid | cs] -> [{:menu, mid} | cs] end
-
-                 :menu_item <-
-                   ("menuItem" | "menuitem") * :+ * :expr * :+ * "of" * :+ * :menu
-                   | :position * :+ * ("menuItem" | "menuitem") * :+ * "of" * :+ * :menu *
-                       fn [{:menu, m}, mid | cs] -> [{:menu_item, mid, m} | cs] end
-
-                 # Parts
-
-                 :by_position <-
-                   str(:position) *
-                     fn [v | cs] -> [{:by_position, v} | cs] end
-
-                 :by_id <-
-                   "id" * :+ * :expr *
-                     fn [ex | cs] -> [{:by_id, ex} | cs] end
-
-                 :by_number <-
-                   :expr *
-                     fn [ex | cs] -> [{:by_number, ex} | cs] end
-
-                 :by_id_or_number <- :by_id | :by_number
-
-                 :card_part_part <-
-                   :card * :+ * "part" * :+ * :expr *
-                     fn [ex | cs] -> [{:card_part, ex} | cs] end
-
-                 :background_part_part <-
-                   :background * :+ * "part" * :+ * :expr *
-                     fn [ex | cs] -> [{:background_part, ex} | cs] end
-
-                 :named_stack <-
-                   "stack" * :+ * :expr *
-                     fn [ex | cs] -> [{:stack, ex} | cs] end
-
-                 :this_stack <-
-                   opt("this") * :+ * "stack" *
-                     fn cs -> [{:stack, :this} | cs] end
-
-                 :stack_part <- :named_stack | :this_stack
-                 :of_background_or_stack <- :of * :+ * (:background_part | :stack_part)
-                 :of_stack <- :of * :+ * :stack_part
-
-                 :specific_background <-
-                   (:by_position * :+ * :background
-                    | :background * :+ * :by_id_or_number) *
-                     fn [ex | cs] -> [{:background, ex} | cs] end
-
-                 :this_background <-
-                   opt("this") * :+ * :background *
-                     fn cs -> [{:background, :this} | cs] end
-
-                 :background_part <-
-                   (:specific_background | :this_background) * :+ * opt(:of_stack)
-
-                 :specific_card <-
-                   (:by_position * :+ * :card
-                    | :card * :+ * :by_id_or_number) *
-                     fn [ex | cs] -> [{:card, ex} | cs] end
-
-                 :this_card <-
-                   opt("this") * :+ * :card *
-                     fn cs -> [{:card, :this} | cs] end
-
-                 :card_part <-
-                   (:specific_card | :this_card) * :+ * opt(:of_stack)
-
-                 :of_card <- :of * :+ * :card_part
-
-                 :background_button <-
-                   :background * :+ * :button * fn cs -> [:background_button | cs] end
-
-                 :card_button <-
-                   opt(:card) * :+ * :button * fn cs -> [:card_button | cs] end
-
-                 :background_or_card_button <- :background_button | :card_button
-
-                 :button_by_position <-
-                   :by_position * :+ * :background_or_card_button *
-                     fn [type, pos | cs] ->
-                       [{:button, type, pos} | cs]
-                     end
-
-                 :button_by_id_or_number <-
-                   :background_or_card_button * :+ * :by_id_or_number *
-                     fn [id, type | cs] ->
-                       [{:button, type, id} | cs]
-                     end
-
-                 :button_part <-
-                   (:button_by_position | :button_by_id_or_number) * :+ * opt(:of_card)
-
-                 :card_field <-
-                   :card * :+ * :field * fn cs -> [:card_field | cs] end
-
-                 :background_field <-
-                   opt(:background) * :+ * :field * fn cs -> [:background_field | cs] end
-
-                 :background_or_card_field <- :card_field | :background_field
-
-                 :field_by_position <-
-                   :by_position * :+ * :background_or_card_field *
-                     fn [type, pos | cs] ->
-                       [{:field, type, pos} | cs]
-                     end
-
-                 :field_by_id_or_number <-
-                   :background_or_card_field * :+ * :by_id_or_number *
-                     fn [id, type | cs] ->
-                       [{:field, type, id} | cs]
-                     end
-
-                 :field_part <- (:field_by_position | :field_by_id_or_number) * :+ * opt(:of_card)
-
-                 :id_window <-
-                   "window" * :+ * opt("id") * :+ * :expr *
-                     fn [ex | cs] -> [{:id_window, ex} | cs] end
-
-                 :card_window <-
-                   :card * :+ * "window" *
-                     fn cs -> [:card_window | cs] end
-
-                 :system_window <-
-                   (str("tool" | "pattern") * :+ * "window"
-                    | str("message" | "variable") * :+ * "watcher") *
-                     fn [name | cs] -> [{:system_window, name} | cs] end
-
-                 :window_part <- :id_window | opt("the") * :+ * (:card_window | :system_window)
-
-                 :me <- "me" * fn cs -> [:me | cs] end
-
-                 :part <-
-                   :me
-                   | :card_part_part
-                   | :background_part_part
-                   | :stack_part
-                   | :window_part
-                   | :background_part
-                   | :card_part
-                   | :button_part
-                   | :field_part
-
-                 # Put factor first to avoid collision of negative :float
-                 :term_b9 <- :term_b10 * star(:+ * :infix_b9)
-                 :term_b8 <- :term_b9 * star(:+ * :infix_b8)
-                 :term_b7 <- :term_b8 * star(:+ * :infix_b7)
-                 :term_b6 <- :term_b7 * star(:+ * :infix_b6)
-                 :term_b5 <- :term_b6 * star(:+ * :infix_b5)
-                 :term_b4 <- :term_b5 * star(:+ * :infix_b4)
-                 :term_b3 <- :term_b4 * star(:+ * :infix_b3)
-                 :term_b2 <- :term_b3 * star(:+ * :infix_b2)
-
-                 # Operators, lowest to highest binding power
-                 :infix_b1 <-
-                   "or" * :+ * :expr *
-                     fn [b, a | cs] ->
-                       [{:or, [a, b]} | cs]
-                     end
-
-                 :infix_b2 <-
-                   "and" * :+ * :term_b2 *
-                     fn [b, a | cs] ->
-                       [{:and, [a, b]} | cs]
-                     end
-
-                 # equality
-                 :op_not_equals <-
-                   ("is" * :+ * "not" | "<>" | "≠") * fn cs -> [:not_equals | cs] end
-
-                 :op_equals <- ("=" | "is") * fn cs -> [:equals | cs] end
-
-                 :infix_b3 <-
-                   (:op_not_equals | :op_equals) * :+ * :term_b3 *
-                     fn [b, op, a | cs] ->
-                       [{op, [a, b]} | cs]
-                     end
-
-                 # comparisons
-                 :op_not_in <- "is" * :+ * "not" * :+ * "in" * fn cs -> [:not_in | cs] end
-
-                 :op_not_type <-
-                   "is" * :+ * "not" * :+ * ("a" * opt("n")) * fn cs -> [:not_type | cs] end
-
-                 :op_in <- "is" * :+ * "in" * fn cs -> [:in | cs] end
-                 :op_is_type <- "is" * :+ * ("a" * opt("n")) * fn cs -> [:is_type | cs] end
-
-                 :infix_b4 <-
-                   str(
-                     "<="
-                     | "≤"
-                     | ">="
-                     | "≥"
-                     | "<"
-                     | ">"
-                     | "contains"
-                     | :op_not_in
-                     | :op_not_type
-                     | :op_in
-                     | :op_is_type
-                   ) * :+ * :term_b4 *
-                     fn [b, op, a | cs] ->
-                       case op do
-                         ">" -> [{:gt, [a, b]} | cs]
-                         "≥" -> [{:gte, [a, b]} | cs]
-                         ">=" -> [{:gte, [a, b]} | cs]
-                         "<" -> [{:lt, [a, b]} | cs]
-                         "≤" -> [{:gte, [a, b]} | cs]
-                         "<=" -> [{:gte, [a, b]} | cs]
-                         "contains" -> [{:contains, [a, b]} | cs]
-                         _ -> [{op, [a, b]} | cs]
-                       end
-                     end
-
-                 # concat, concat_ws
-                 :infix_b5 <-
-                   str("&&" | "&") * :+ * :term_b5 *
-                     fn [b, op, a | cs] ->
-                       case op do
-                         "&&" -> [{:concat_ws, [a, b]} | cs]
-                         "&" -> [{:concat, [a, b]} | cs]
-                       end
-                     end
-
-                 # add, sub
-                 :infix_b6 <-
-                   str({~c"+", ~c"-"}) * :+ * :term_b6 *
-                     fn [b, op, a | cs] ->
-                       case op do
-                         "+" -> [{:add, [a, b]} | cs]
-                         "-" -> [{:sub, [a, b]} | cs]
-                       end
-                     end
-
-                 # mul, div, mod, div_trunc
-                 :infix_b7 <-
-                   str("*" | "/" | "div" | "mod") * :+ * :term_b7 *
-                     fn [b, op, a | cs] ->
-                       case op do
-                         "*" -> [{:mul, [a, b]} | cs]
-                         "/" -> [{:div, [a, b]} | cs]
-                         "mod" -> [{:mod, [a, b]} | cs]
-                         "div" -> [{:div_trunc, [a, b]} | cs]
-                       end
-                     end
-
-                 # pow
-                 :infix_b8 <-
-                   str("^") * :+ * :term_b8 *
-                     fn [b, _op, a | cs] -> [{:pow, [a, b]} | cs] end
-
-                 # within
-                 :op_not_within <-
-                   "is" * :+ * "not" * :+ * "within" * fn cs -> [:not_within | cs] end
-
-                 :op_within <- "is" * :+ * "within" * fn cs -> [:within | cs] end
-
-                 :infix_b9 <-
-                   (:op_not_within | :op_within) * :+ * :term_b9 *
-                     fn [b, op, a | cs] ->
-                       [{op, [a, b]} | cs]
-                     end
-
-                 # exists, not, negate
-                 :op_not_exists <-
-                   "there" * :+ * "is" * :+ * ("no" * opt("t")) * :+ * ("a" * opt("n")) *
-                     fn cs -> [:not_exists | cs] end
-
-                 :op_exists <-
-                   "there" * :+ * "is" * :+ * ("a" * opt("n")) * fn cs -> [:exists | cs] end
-
-                 :prefix_b10 <-
-                   (str("-" | "not") | :op_not_exists | :op_exists) * :+ * :term_b10 *
-                     fn [x, op | cs] ->
-                       case op do
-                         "-" -> [{:negate, [x]} | cs]
-                         "not" -> [{:not, [x]} | cs]
-                         _ -> [{op, [x]} | cs]
-                       end
-                     end
-
-                 :parameter_list <-
-                   :param * :+ * star(:+ * "," * :+ * :param) *
-                     fn cs ->
-                       {params, rest} =
-                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
-                           cs,
-                           [in: :param, reverse: true, extract: true]
-                         ])
-
-                       [{:params, params} | rest]
-                     end
-
-                 :global <-
-                   "global" * :+ * :parameter_list *
-                     fn cs ->
-                       {params, rest} =
-                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
-                           cs,
-                           [in: :params]
-                         ])
-
-                       case params do
-                         [{:params, params}] -> [{:global, params} | rest]
-                         [] -> [{:global, []} | rest]
-                       end
-                     end
-
-                 :return <-
-                   "return" * :+ * opt(:expr) *
-                     fn cs -> [{:return, cs}] end
-
-                 :handler_id <- :command_name | :message_name | :id
-
-                 :handler_name <-
-                   str(:handler_id) *
-                     fn [name | cs] -> [{:handler_name, name} | cs] end
-
-                 :pass <-
-                   "pass" * :+ * :handler_name *
-                     fn [{:handler_name, name} | cs] -> [{:pass, name} | cs] end
-
-                 :exit_to_hypercard <-
-                   "to" * :+ * ("HyperCard" | "hypercard") *
-                     fn cs -> [:exit_to_hypercard | cs] end
-
-                 :exit_repeat <- "repeat" * fn cs -> [:exit_repeat | cs] end
-
-                 :exit_handler <-
-                   :handler_name *
-                     fn [{:handler_name, name} | cs] -> [{:exit_handler, name} | cs] end
-
-                 :exit <- "exit" * :+ * (:exit_to_hypercard | :exit_repeat | :exit_handler)
-
-                 :end_if <- "end" * :+ * "if"
-                 :else_single <- :statement * opt(+Nl * :+ * :end_if)
-                 :else_multi <- +Nl * :+ * opt(:statement_list) * :+ * :end_if
-                 :else <- "else" * :+ * (:else_single | :else_multi)
-
-                 :then_multiline <-
-                   +Nl * :+ * :statement_list * star(Nl) * :+ * (:else | :end_if)
-
-                 :then_single_line <- :statement * opt(Nl) * :+ * opt(:else)
-                 :then <- "then" * :+ * (:then_multiline | :then_single_line)
-
-                 :if <-
-                   "if" * :+ * :expr * opt(Nl) * :+ * :then *
-                     fn cs ->
-                       {stmnts, [test | rest]} =
-                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
-                           cs,
-                           [in: [:statement, :statements]]
-                         ])
-
-                       case stmnts do
-                         [{:statement, if_path}] ->
-                           [{:if, test, [if_path], []} | rest]
-
-                         [{:statements, if_path}] ->
-                           [{:if, test, if_path, []} | rest]
-
-                         [{:statement, else_path}, {:statement, if_path}] ->
-                           [{:if, test, [if_path], [else_path]} | rest]
-
-                         [{:statements, else_path}, {:statements, if_path}] ->
-                           [{:if, test, if_path, else_path} | rest]
-                       end
-                     end
-
-                 :repeat_until <-
-                   "until" * :+ * :expr * fn [ex | cs] -> [{:repeat_until, [], ex} | cs] end
-
-                 :repeat_while <-
-                   "while" * :+ * :expr * fn [ex | cs] -> [{:repeat_while, [], ex} | cs] end
-
-                 :repeat_with_desc <-
-                   str(:id) * :+ * "=" * :+ * :expr * :+ * "down" * :+ * "to" * :+ * :expr *
-                     fn [to, from, var | cs] -> [{:repeat_with_desc, [], var, from, to} | cs] end
-
-                 :repeat_with_asc <-
-                   str(:id) * :+ * "=" * :+ * :expr * :+ * "to" * :+ * :expr *
-                     fn [to, from, var | cs] -> [{:repeat_with_asc, [], var, from, to} | cs] end
-
-                 :repeat_with <- "with" * :+ * (:repeat_with_desc | :repeat_with_asc)
-
-                 :repeat_forever <- "forever" * fn cs -> [{:repeat_forever, []} | cs] end
-
-                 :repeat_count <-
-                   opt("for") * :+ * :expr * :+ * opt("times") *
-                     fn [ex | cs] -> [{:repeat_count, [], ex} | cs] end
-
-                 :repeat_range <-
-                   :repeat_until
-                   | :repeat_while
-                   | :repeat_with
-                   | :repeat_forever
-                   | :repeat_count
-
-                 :repeat <-
-                   "repeat" * :+ * :repeat_range * +Nl * :+ * :statement_list * :+ *
-                     "end" * :+ * "repeat" *
-                     fn [{:statements, stmnts}, rep | cs] ->
-                       rep =
-                         case rep do
-                           {:repeat_until, _, ex} ->
-                             {:repeat_until, stmnts, ex}
-
-                           {:repeat_while, _, ex} ->
-                             {:repeat_while, stmnts, ex}
-
-                           {:repeat_with_desc, _, var, from, to} ->
-                             {:repeat_with_desc, stmnts, var, from, to}
-
-                           {:repeat_with_asc, _, var, from, to} ->
-                             {:repeat_with_asc, stmnts, var, from, to}
-
-                           {:repeat_forever, _} ->
-                             {:repeat_forever, stmnts}
-
-                           {:repeat_count, _, ex} ->
-                             {:repeat_count, stmnts, ex}
-                         end
-
-                       [rep | cs]
-                     end
-
-                 :message_name <-
-                   "appleEvent"
-                   | "appleevent"
-                   | "arrowKey"
-                   | "arrowkey"
-                   | "closeBackground"
-                   | "closebackground"
-                   | "closeCard"
-                   | "closecard"
-                   | "closeField"
-                   | "closefield"
-                   | "closePalette"
-                   | "closepalette"
-                   | "closePicture"
-                   | "closepicture"
-                   | "closeStack"
-                   | "closestack"
-                   | "close"
-                   | "commandKeyDown"
-                   | "commandkeydown"
-                   | "controlKey"
-                   | "controlkey"
-                   | "deleteBackground"
-                   | "deletebackground"
-                   | "deleteButton"
-                   | "deletebutton"
-                   | "deleteCard"
-                   | "deletecard"
-                   | "deleteField"
-                   | "deletefield"
-                   | "deleteStack"
-                   | "deletestack"
-                   | "doMenu"
-                   | "domenu"
-                   | "enterInField"
-                   | "enterinfield"
-                   | "enterKey"
-                   | "enterkey"
-                   | "errorDialog"
-                   | "errordialog"
-                   | "exitField"
-                   | "exitfield"
-                   | "functionKey"
-                   | "functionkey"
-                   | "help"
-                   | "hide"
-                   | "idle"
-                   | "keyDown"
-                   | "keydown"
-                   | "mouseDoubleClick"
-                   | "mousedoubleclick"
-                   | "mouseDownInPicture"
-                   | "mousedowninpicture"
-                   | "mouseDown"
-                   | "mousedown"
-                   | "mouseEnter"
-                   | "mouseenter"
-                   | "mouseLeave"
-                   | "mouseleave"
-                   | "mouseStillDown"
-                   | "mousestilldown"
-                   | "mouseUpInPicture"
-                   | "mouseupinpicture"
-                   | "mouseUp"
-                   | "mouseup"
-                   | "mouseWithin"
-                   | "mousewithin"
-                   | "moveWindow"
-                   | "movewindow"
-                   | "newBackground"
-                   | "newbackground"
-                   | "newButton"
-                   | "newbutton"
-                   | "newCard"
-                   | "newcard"
-                   | "newField"
-                   | "newfield"
-                   | "newStack"
-                   | "newstack"
-                   | "openBackground"
-                   | "openbackground"
-                   | "openCard"
-                   | "opencard"
-                   | "openField"
-                   | "openfield"
-                   | "openPalette"
-                   | "openpalette"
-                   | "openPicture"
-                   | "openpicture"
-                   | "openStack"
-                   | "openstack"
-                   | "quit"
-                   | "resume"
-                   | "resumeStack"
-                   | "resumestack"
-                   | "returnInField"
-                   | "returninfield"
-                   | "returnKey"
-                   | "returnkey"
-                   | "show"
-                   | "sizeWindow"
-                   | "sizewindow"
-                   | "startUp"
-                   | "startup"
-                   | "suspendStack"
-                   | "suspendstack"
-                   | "suspend"
-                   | "tabKey"
-                   | "tabkey"
-
-                 :zero_arg_command_name <-
-                   "enterInField"
-                   | "enterinfield"
-                   | "enterKey"
-                   | "enterkey"
-                   | "help"
-                   | "returnInField"
-                   | "returninfield"
-                   | "returnKey"
-                   | "returnkey"
-                   | "tabKey"
-                   | "tabkey"
-
-                 :zero_or_arg_command_name <-
-                   "beep"
-
-                 :arg_command_name <-
-                   "add"
-                   | "answer"
-                   | "arrowKey"
-                   | "arrowkey"
-                   | "ask"
-                   | "choose"
-                   | "click"
-                   | "close"
-                   | "commandKeyDown"
-                   | "commandkeyDown"
-                   | "controlKey"
-                   | "controlkey"
-                   | "convert"
-                   | "create"
-                   | "debug"
-                   | "delete"
-                   | "dial"
-                   | "disable"
-                   | "divide"
-                   | "do"
-                   | "doMenu"
-                   | "domenu"
-                   | "drag"
-                   | "enable"
-                   | "export"
-                   | "find"
-                   | "get"
-                   | "go"
-                   | "hide"
-                   | "import"
-                   | "keyDown"
-                   | "keydown"
-                   | "lock"
-                   | "mark"
-                   | "multiply"
-                   | "next"
-                   | "open"
-                   | "palette"
-                   | "picture"
-                   | "play"
-                   | "pop"
-                   | "print"
-                   | "push"
-                   | "put"
-                   | "read"
-                   | "reply"
-                   | "request"
-                   | "reset"
-                   | "save"
-                   | "select"
-                   | "send"
-                   | "set"
-                   | "show"
-                   | "sort"
-                   | "stop"
-                   | "subtract"
-                   | "type"
-                   | "unlock"
-                   | "ummark"
-                   | "visual"
-                   | "wait"
-                   | "write"
-
-                 :command_name <-
-                   :zero_arg_command_name
-                   | :zero_or_arg_command_name
-                   | :arg_command_name
-
-                 :arg_command <-
-                   str(:zero_or_arg_command_name | :arg_command_name) * Sp * str(WordsToEol) *
-                     fn [args, name | cs] -> [{:command, name, args} | cs] end
-
-                 :zero_arg_command <-
-                   str(:zero_or_arg_command_name | :zero_arg_command_name) *
-                     fn [name | cs] -> [{:command, name, ""} | cs] end
-
+                 :id_prop_name <-
+                   "number"
+
+                 :text_prop_name <-
+                   "textAlign"
+                   | "textalign"
+                   | "textFont"
+                   | "textfont"
+                   | "textHeight"
+                   | "textheight"
+                   | "textSize"
+                   | "textsize"
+                   | "textStyle"
+                   | "textstyle"
+
+                 ## Function names
                  :date_time_func_name <- "date" | "time"
 
                  :zero_arg_func_name <-
@@ -1528,153 +1610,78 @@ defmodule Hyperex.Grammar do
                    | "max"
                    | "sum"
 
-                 :the_formatted_func <-
-                   "the" * :+ * opt(:adjective) * :+ * str(:date_time_func_name | "target") *
-                     fn [name | cs] ->
-                       name =
-                         if name == "target" do
-                           "the_target"
-                         else
-                           name
-                         end
+                 ## Common aliases and values
+                 :constant <-
+                   str(
+                     :true_false
+                     | :cardinal_value
+                     | "empty"
+                     | "pi"
+                     | "quote"
+                     | "return"
+                     | "space"
+                     | "tab"
+                     | "formFeed"
+                     | "formfeed"
+                     | "lineFeed"
+                     | "linefeed"
+                     | "comma"
+                     | "colon"
+                   ) * fn [v | cs] -> [{:constant, v} | cs] end
 
-                       case cs do
-                         [{:format, _} = fmt | rest] ->
-                           [{:function_call, name, [], [fmt]} | rest]
+                 :true_false <- "true" | "false"
+                 :of <- "of" | "in"
+                 :button <- "buttons" | "button" | "btns" | "btn"
+                 :field <- "fields" | "field" | "flds" | "fld"
+                 :card <- "card" | "cd"
+                 :background <- "background" | "bkgnd"
+                 :characters <- "characters" | "chars"
+                 :character <- "character" | "char"
+                 :chunk_type <- :characters | "words" | "lines" | "items"
 
-                         _ ->
-                           [{:function_call, name, [], []} | cs]
-                       end
-                     end
+                 :cardinal_value <-
+                   "zero"
+                   | "one"
+                   | "two"
+                   | "three"
+                   | "four"
+                   | "five"
+                   | "six"
+                   | "seven"
+                   | "eight"
+                   | "nine"
+                   | "ten"
 
-                 :target_func <- "target" * fn cs -> [{:function_call, "target", [], []} | cs] end
+                 :ordinal_value <-
+                   "first"
+                   | "second"
+                   | "third"
+                   | "fourth"
+                   | "fifth"
+                   | "sixth"
+                   | "seventh"
+                   | "eighth"
+                   | "ninth"
+                   | "tenth"
+                   | "middle"
+                   | "mid"
+                   | "last"
+                   | "any"
 
-                 :number_func <-
-                   opt("the") * :+ * "number" * :+ * "of" * :+ * str(1 - Nl) *
-                     fn [obj | cs] -> [{:function_call, "number", [obj], []} | cs] end
-
-                 :zero_arg_func <-
-                   str(:zero_arg_func_name) *
-                     fn [name | cs] -> [{:function_call, name, [], []} | cs] end
-
-                 :single_arg_func <-
-                   str(:single_arg_func_name) *
-                     fn [name | cs] -> [{:function_call, name, [], []} | cs] end
-
-                 :the_single_arg_func_of <-
-                   "the" * :+ * :single_arg_func * :+ * "of" * :+ * :expr *
-                     fn [ex, {:function_call, name, _, opts} | cs] ->
-                       [{:function_call, name, [ex], opts} | cs]
-                     end
-
-                 :single_arg_func_parens <-
-                   :single_arg_func * :+ * "(" * :+ * :expr * :+ * ")" *
-                     fn [ex, {:function_call, name, _, opts} | cs] ->
-                       [{:function_call, name, [ex], opts} | cs]
-                     end
-
-                 :list_arg_func <-
-                   str(:two_arg_func_name | :list_arg_func_name) * :+ *
-                     "(" * :+ * :expr_list * :+ * ")" *
-                     fn cs ->
-                       {exlist, [name | rest]} =
-                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
-                           cs,
-                           [reverse: true]
-                         ])
-
-                       [{:function_call, name, exlist, []} | rest]
-                     end
-
-                 :built_in_func <-
-                   :the_formatted_func
-                   | :the_single_arg_func_of
-                   | "the" * :+ * :zero_arg_func
-                   | :target_func
-                   | :number_func
-                   | :zero_arg_func * :+ * "(" * :+ * ")"
-                   | :single_arg_func_parens
-                   | :list_arg_func
-
-                 :user_func <-
-                   str(:id) * :+ * "(" * :+ * opt(:expr_list) * :+ * ")" *
-                     fn cs ->
-                       {exlist, [name | rest]} =
-                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
-                           cs,
-                           [reverse: true]
-                         ])
-
-                       [{:function_call, name, exlist, [user_defined: true]} | rest]
-                     end
-
-                 :param <- str(:id) * fn [v | cs] -> [{:param, v} | cs] end
-
-                 :handler <-
-                   "on" * :+ * :handler_name * :+ * opt(:parameter_list) * +Nl *
-                     :+ *
-                     opt(:statement_list) * :+ * "end" * :+ * :handler_id *
-                     fn cs ->
-                       {handler, rest} =
-                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
-                           cs,
-                           [in: [:params, :statements, :handler_name]]
-                         ])
-
-                       {name, params, stmnts} =
-                         Enum.reduce(handler, {"", [], []}, fn elem, {n, p, s} ->
-                           case elem do
-                             {:handler_name, name} -> {name, p, s}
-                             {:params, params} -> {n, params, s}
-                             {:statements, statement_list} -> {n, p, statement_list}
-                           end
-                         end)
-
-                       [{:handler, name, params, stmnts} | rest]
-                     end
-
-                 :function_name <- str(:id) * fn [name | cs] -> [{:function_name, name} | cs] end
-
-                 :function_def <-
-                   "function" * :+ * :function_name * :+ * opt(:parameter_list) * +Nl * :+ *
-                     opt(:statement_list) * :+ * "end" * :+ * :id *
-                     fn cs ->
-                       {function, rest} =
-                         Kernel.apply(Hyperex.Grammar.Helpers, :split_opt_list, [
-                           cs,
-                           [in: [:params, :statements, :function_name]]
-                         ])
-
-                       {name, params, stmnts} =
-                         Enum.reduce(function, {"", [], []}, fn elem, {n, p, s} ->
-                           case elem do
-                             {:function_name, name} -> {name, p, s}
-                             {:params, params} -> {n, params, s}
-                             {:statements, statement_list} -> {n, p, statement_list}
-                           end
-                         end)
-
-                       [{:function, name, params, stmnts} | rest]
-                     end
-
-                 # Token delimeters
-                 :+ <- opt(Ws)
-                 Sp <- +Ws
+                 :position <-
+                   "this" | opt("the" * Ws) * (:ordinal_value | "next" | "previous" | "prev")
 
                  # Basics
-                 Ws <- " " | "\t"
-                 Eol <- Nl | Eoi
+                 :id <- NonReserved | Identifier - Reserved
+
                  WordsToEol <- star(1 - Eol)
                  Nl <- opt(Ws) * opt(Comment) * "\n"
                  Comment <- "--" * star(1 - "\n")
                  Identifier <- AlphaLower * star(Alpha | Digit)
-                 :id <- NonReserved | Identifier - Reserved
                  NonReserved <- Reserved * +(Alpha | Digit)
                  Alpha <- {~c"A"..~c"Z"} | AlphaLower
                  Digit <- {~c"0"..~c"9"}
                  AlphaLower <- {~c"a"..~c"z"}
-                 Soi <- "{{"
-                 Eoi <- "}}"
                end)
 
   def peg_script, do: @peg_script

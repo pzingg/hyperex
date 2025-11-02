@@ -321,6 +321,12 @@ defmodule Hyperex.ScriptTest do
     test "named stack", %{peg: peg} do
       run(peg, "stack \"Home\"", :ok, scriptlet: [{:stack, {:string_lit, "Home"}}])
     end
+
+    test "card button example", %{peg: peg} do
+      run(peg, "card button \"Rolo\" of card \"Home\" of stack \"MyHardDisk:Home\"", :ok,
+        scriptlet: []
+      )
+    end
   end
 
   describe "scriptlet exprs" do
