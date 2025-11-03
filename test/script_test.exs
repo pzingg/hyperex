@@ -13,14 +13,17 @@ defmodule Hyperex.ScriptTest do
 
     result =
       if r.result == :ok && r.rest != [] do
-        IO.puts("partial '#{r.rest}'")
         :partial
       else
         r.result
       end
 
-    assert(result == exp_result, "expected #{inspect(exp_result)}, got #{inspect(result)}")
+    if r.rest != [] do
+      IO.puts("unparsed: #{inspect(r)}'")
+    end
+
     assert(r.captures == exp_captures)
+    assert(result == exp_result)
   end
 
   describe "syntax errors" do
@@ -317,14 +320,139 @@ defmodule Hyperex.ScriptTest do
     end
   end
 
+  describe "scriptlet chunks" do
+    test "lines of string", %{peg: peg} do
+      run(peg, "lines of \"Hello\nGoodbye\"", :ok,
+        scriptlet: [{:chunk, {:string_lit, "Hello\nGoodbye"}, :lines}]
+      )
+    end
+
+    test "ordinal line of string", %{peg: peg} do
+      run(peg, "second line of \"Hello\nGoodbye\"", :ok,
+        scriptlet: [
+          {:chunk, {:string_lit, "Hello\nGoodbye"}, {:line_chunk, {:by_position, "second"}, nil}}
+        ]
+      )
+    end
+
+    test "words of string", %{peg: peg} do
+      run(peg, "words of \"Hello\nGoodbye\"", :ok,
+        scriptlet: [
+          {:chunk, {:string_lit, "Hello\nGoodbye"}, :words}
+        ]
+      )
+    end
+
+    test "words of ordinal line of string", %{peg: peg} do
+      run(peg, "words of second line of \"Hello\nGoodbye\"", :ok,
+        scriptlet: [
+          {:chunk, {:string_lit, "Hello\nGoodbye"},
+           {:line_chunk, {:by_position, "second"}, :words}}
+        ]
+      )
+    end
+
+    test "ordinal char of string", %{peg: peg} do
+      run(peg, "third char of \"Hello\nGoodbye\"", :ok,
+        scriptlet: [
+          {:chunk, {:string_lit, "Hello\nGoodbye"}, {:char_chunk, {:by_position, "third"}, nil}}
+        ]
+      )
+    end
+
+    test "ordinal char of ordinal word of string", %{peg: peg} do
+      run(peg, "third char of first word of \"Hello\nGoodbye\"", :ok,
+        scriptlet: [
+          {:chunk, {:string_lit, "Hello\nGoodbye"},
+           {:word_chunk, {:by_position, "first"}, {:char_chunk, {:by_position, "third"}, nil}}}
+        ]
+      )
+    end
+
+    test "ordinal char of ordinal word of ordinal line of string", %{peg: peg} do
+      run(peg, "third char of first word of second line of \"Hello\nGoodbye\"", :ok,
+        scriptlet: [
+          {:chunk, {:string_lit, "Hello\nGoodbye"},
+           {:line_chunk, {:by_position, "second"},
+            {:word_chunk, {:by_position, "first"}, {:char_chunk, {:by_position, "third"}, nil}}}}
+        ]
+      )
+    end
+
+    test "ordinal char of ordinal line of string", %{peg: peg} do
+      run(peg, "third char of second line of \"Hello\nGoodbye\"", :ok,
+        scriptlet: [
+          {:chunk, {:string_lit, "Hello\nGoodbye"},
+           {:line_chunk, {:by_position, "second"}, {:char_chunk, {:by_position, "third"}, nil}}}
+        ]
+      )
+    end
+  end
+
   describe "scriptlet parts" do
     test "named stack", %{peg: peg} do
       run(peg, "stack \"Home\"", :ok, scriptlet: [{:stack, {:string_lit, "Home"}}])
     end
 
-    test "card button example", %{peg: peg} do
+    test "card button 1", %{peg: peg} do
+      run(peg, "card button \"Rolo\"", :ok,
+        scriptlet: [{:card_button, {:by_name_or_number, {:string_lit, "Rolo"}}}]
+      )
+    end
+
+    test "card button 2", %{peg: peg} do
+      run(peg, "card button \"Rolo\" of card \"Home\"", :ok,
+        scriptlet: [
+          {:card_part, {:by_name_or_number, {:string_lit, "Home"}},
+           {:card_button, {:by_name_or_number, {:string_lit, "Rolo"}}}}
+        ]
+      )
+    end
+
+    test "card button 3", %{peg: peg} do
       run(peg, "card button \"Rolo\" of card \"Home\" of stack \"MyHardDisk:Home\"", :ok,
-        scriptlet: []
+        scriptlet: [
+          {:stack_part, {:string_lit, "MyHardDisk:Home"},
+           {:card_part, {:by_name_or_number, {:string_lit, "Home"}},
+            {:card_button, {:by_name_or_number, {:string_lit, "Rolo"}}}}}
+        ]
+      )
+    end
+
+    test "background button 1", %{peg: peg} do
+      run(peg, "background button \"Rolo\"", :ok,
+        scriptlet: [{:background_button, {:by_name_or_number, {:string_lit, "Rolo"}}}]
+      )
+    end
+
+    test "background button 2", %{peg: peg} do
+      run(peg, "background button \"Rolo\" of background \"Home\"", :ok,
+        scriptlet: [
+          {:background_part, {:by_name_or_number, {:string_lit, "Home"}},
+           {:background_button, {:by_name_or_number, {:string_lit, "Rolo"}}}}
+        ]
+      )
+    end
+
+    test "background button 3", %{peg: peg} do
+      run(
+        peg,
+        "background button \"Rolo\" of background \"Home\" of stack \"MyHardDisk:Home\"",
+        :ok,
+        scriptlet: [
+          {:stack_part, {:string_lit, "MyHardDisk:Home"},
+           {:background_part, {:by_name_or_number, {:string_lit, "Home"}},
+            {:background_button, {:by_name_or_number, {:string_lit, "Rolo"}}}}}
+        ]
+      )
+    end
+
+    test "background button 4", %{peg: peg} do
+      run(peg, "background button \"Rolo\" of card id 2500", :ok,
+        scriptlet: [
+          {:card_part, {:by_id, {:integer, 2500}},
+           {:background_button, {:by_name_or_number, {:string_lit, "Rolo"}}}}
+        ]
       )
     end
   end

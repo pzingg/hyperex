@@ -1,27 +1,46 @@
 defmodule Hyperex.Grammar.Helpers do
-  def split_opt_list(cs, opts) do
+  def collect_atoms(cs, opts) do
+    fun =
+      case Keyword.get(opts, :in) do
+        nil -> fn c -> is_atom(c) end
+        tags -> fn c -> is_atom(c) && c in List.wrap(tags) end
+      end
+
+    {atoms, rest} = Enum.split_with(cs, fun)
+
+    atoms =
+      if Keyword.get(opts, :reverse, false) do
+        Enum.reverse(atoms)
+      else
+        atoms
+      end
+
+    {atoms, rest}
+  end
+
+  def collect_tuples(cs, opts) do
     fun =
       case Keyword.get(opts, :in) do
         nil -> fn c -> is_tuple(c) end
         tags -> fn c -> is_tuple(c) && elem(c, 0) in List.wrap(tags) end
       end
 
-    {opt_list, rest} = Enum.split_with(cs, fun)
+    {tuples, rest} = Enum.split_with(cs, fun)
 
-    opt_list =
+    tuples =
       if Keyword.get(opts, :extract, false) do
-        Enum.map(opt_list, fn c -> elem(c, 1) end)
+        Enum.map(tuples, fn c -> elem(c, 1) end)
       else
-        opt_list
+        tuples
       end
 
-    opt_list =
+    tuples =
       if Keyword.get(opts, :reverse, false) do
-        Enum.reverse(opt_list)
+        Enum.reverse(tuples)
       else
-        opt_list
+        tuples
       end
 
-    {opt_list, rest}
+    {tuples, rest}
   end
 end
