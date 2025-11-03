@@ -320,6 +320,74 @@ defmodule Hyperex.ScriptTest do
     end
   end
 
+  describe "scriptlet parts" do
+    test "named stack", %{peg: peg} do
+      run(peg, "stack \"Home\"", :ok, scriptlet: [{:stack, {:string_lit, "Home"}}])
+    end
+
+    test "card button 1", %{peg: peg} do
+      run(peg, "card button \"Rolo\"", :ok,
+        scriptlet: [{:card_button, {:by_name_or_number, {:string_lit, "Rolo"}}}]
+      )
+    end
+
+    test "card button 2", %{peg: peg} do
+      run(peg, "card button \"Rolo\" of card \"Home\"", :ok,
+        scriptlet: [
+          {:card_part, {:by_name_or_number, {:string_lit, "Home"}},
+           {:card_button, {:by_name_or_number, {:string_lit, "Rolo"}}}}
+        ]
+      )
+    end
+
+    test "card button 3", %{peg: peg} do
+      run(peg, "card button \"Rolo\" of card \"Home\" of stack \"MyHardDisk:Home\"", :ok,
+        scriptlet: [
+          {:stack_part, {:string_lit, "MyHardDisk:Home"},
+           {:card_part, {:by_name_or_number, {:string_lit, "Home"}},
+            {:card_button, {:by_name_or_number, {:string_lit, "Rolo"}}}}}
+        ]
+      )
+    end
+
+    test "background button 1", %{peg: peg} do
+      run(peg, "background button \"Rolo\"", :ok,
+        scriptlet: [{:background_button, {:by_name_or_number, {:string_lit, "Rolo"}}}]
+      )
+    end
+
+    test "background button 2", %{peg: peg} do
+      run(peg, "background button \"Rolo\" of background \"Home\"", :ok,
+        scriptlet: [
+          {:background_part, {:by_name_or_number, {:string_lit, "Home"}},
+           {:background_button, {:by_name_or_number, {:string_lit, "Rolo"}}}}
+        ]
+      )
+    end
+
+    test "background button 3", %{peg: peg} do
+      run(
+        peg,
+        "background button \"Rolo\" of background \"Home\" of stack \"MyHardDisk:Home\"",
+        :ok,
+        scriptlet: [
+          {:stack_part, {:string_lit, "MyHardDisk:Home"},
+           {:background_part, {:by_name_or_number, {:string_lit, "Home"}},
+            {:background_button, {:by_name_or_number, {:string_lit, "Rolo"}}}}}
+        ]
+      )
+    end
+
+    test "background button 4", %{peg: peg} do
+      run(peg, "background button \"Rolo\" of card id 2500", :ok,
+        scriptlet: [
+          {:card_part, {:by_id, {:integer, 2500}},
+           {:background_button, {:by_name_or_number, {:string_lit, "Rolo"}}}}
+        ]
+      )
+    end
+  end
+
   describe "scriptlet chunks" do
     test "lines of string", %{peg: peg} do
       run(peg, "lines of \"Hello\nGoodbye\"", :ok,
@@ -387,71 +455,12 @@ defmodule Hyperex.ScriptTest do
         ]
       )
     end
-  end
 
-  describe "scriptlet parts" do
-    test "named stack", %{peg: peg} do
-      run(peg, "stack \"Home\"", :ok, scriptlet: [{:stack, {:string_lit, "Home"}}])
-    end
-
-    test "card button 1", %{peg: peg} do
-      run(peg, "card button \"Rolo\"", :ok,
-        scriptlet: [{:card_button, {:by_name_or_number, {:string_lit, "Rolo"}}}]
-      )
-    end
-
-    test "card button 2", %{peg: peg} do
-      run(peg, "card button \"Rolo\" of card \"Home\"", :ok,
+    test "chunk of part", %{peg: peg} do
+      run(peg, "first line of card field \"Rolo\"", :ok,
         scriptlet: [
-          {:card_part, {:by_name_or_number, {:string_lit, "Home"}},
-           {:card_button, {:by_name_or_number, {:string_lit, "Rolo"}}}}
-        ]
-      )
-    end
-
-    test "card button 3", %{peg: peg} do
-      run(peg, "card button \"Rolo\" of card \"Home\" of stack \"MyHardDisk:Home\"", :ok,
-        scriptlet: [
-          {:stack_part, {:string_lit, "MyHardDisk:Home"},
-           {:card_part, {:by_name_or_number, {:string_lit, "Home"}},
-            {:card_button, {:by_name_or_number, {:string_lit, "Rolo"}}}}}
-        ]
-      )
-    end
-
-    test "background button 1", %{peg: peg} do
-      run(peg, "background button \"Rolo\"", :ok,
-        scriptlet: [{:background_button, {:by_name_or_number, {:string_lit, "Rolo"}}}]
-      )
-    end
-
-    test "background button 2", %{peg: peg} do
-      run(peg, "background button \"Rolo\" of background \"Home\"", :ok,
-        scriptlet: [
-          {:background_part, {:by_name_or_number, {:string_lit, "Home"}},
-           {:background_button, {:by_name_or_number, {:string_lit, "Rolo"}}}}
-        ]
-      )
-    end
-
-    test "background button 3", %{peg: peg} do
-      run(
-        peg,
-        "background button \"Rolo\" of background \"Home\" of stack \"MyHardDisk:Home\"",
-        :ok,
-        scriptlet: [
-          {:stack_part, {:string_lit, "MyHardDisk:Home"},
-           {:background_part, {:by_name_or_number, {:string_lit, "Home"}},
-            {:background_button, {:by_name_or_number, {:string_lit, "Rolo"}}}}}
-        ]
-      )
-    end
-
-    test "background button 4", %{peg: peg} do
-      run(peg, "background button \"Rolo\" of card id 2500", :ok,
-        scriptlet: [
-          {:card_part, {:by_id, {:integer, 2500}},
-           {:background_button, {:by_name_or_number, {:string_lit, "Rolo"}}}}
+          {:chunk, {:card_field, {:by_name_or_number, {:string_lit, "Rolo"}}},
+           {:line_chunk, {:by_position, "first"}, nil}}
         ]
       )
     end
