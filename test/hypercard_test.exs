@@ -27,8 +27,17 @@ defmodule Hyperex.HypercardTest do
   describe "evaluates" do
     test "integer" do
       ast = {:integer, 101}
-      res = Hypercard.eval(ast)
-      assert res.value.as_integer == 101
+      ev = Hypercard.eval(ast)
+      assert ev.error == nil
+      assert ev.value.as_integer == 101
+    end
+
+    test "variable" do
+      ast = {:message_or_var, "stacks"}
+      ev = Hypercard.eval(ast)
+      assert ev.error == nil
+      stacks_dir = Path.join(:code.priv_dir(:hyperex), "stacks")
+      assert ev.value.as_string == stacks_dir
     end
 
     test "contents of card button with default stack and card" do
@@ -47,6 +56,18 @@ defmodule Hyperex.HypercardTest do
       ev = Hypercard.eval(ast)
       assert ev.error == nil
       assert ev.value.as_string == "2nd card button contents"
+    end
+
+    test "number of cards in stack" do
+      res = Hypercard.number_of_cards("Home", :card)
+      assert {:ok, 2} = res
+    end
+
+    test "number of fields in card" do
+      res = Hypercard.get_card_or_background("Home", :card, name: "Card 1")
+      assert {:ok, card, _} = res
+      res = Hypercard.number_of_parts("Home", card.id, :card, :field)
+      assert {:ok, 1} = res
     end
   end
 end

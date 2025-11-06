@@ -30,6 +30,14 @@ defmodule Hyperex.Hypercard.Context do
 
   def new(), do: %__MODULE__{}
 
+  def add_variable(ctx, name, value) do
+    %__MODULE__{ctx | variables: Map.put(ctx.variables, name, value)}
+  end
+
+  def get_variable(ctx, name) when is_binary(name) do
+    Map.get(ctx.variables, name)
+  end
+
   def insert_stack(ctx, stack, path, opts) do
     ctx =
       if Keyword.get(opts, :go_first?) do
@@ -82,6 +90,18 @@ defmodule Hyperex.Hypercard.Context do
     end
   end
 
+  def get_number_of_cards_or_backgrounds(ctx, stack_name, kind) do
+    res = get_stack(ctx, stack_name)
+
+    case res do
+      {:error, _} = error ->
+        error
+
+      {:ok, stack, _} ->
+        Stack.number_of_cards_or_backgrounds(stack, kind)
+    end
+  end
+
   def get_card_or_background(ctx, stack_name, kind, query) do
     res = get_stack(ctx, stack_name)
 
@@ -91,6 +111,27 @@ defmodule Hyperex.Hypercard.Context do
 
       {:ok, stack, _} ->
         Stack.find_card_or_background(stack, kind, query)
+    end
+  end
+
+  def get_number_of_parts(ctx, stack_name, card_id, parent_kind, kind) do
+    res = get_stack(ctx, stack_name)
+
+    case res do
+      {:error, _} = error ->
+        error
+
+      {:ok, stack, _} ->
+        card_id = default_card_id(ctx, card_id)
+        res = Stack.find_card_or_background(stack, :card, id: card_id)
+
+        case res do
+          {:error, _} = error ->
+            error
+
+          {:ok, card, background} ->
+            Stack.number_of_parts(card, background, parent_kind, kind)
+        end
     end
   end
 

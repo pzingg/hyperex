@@ -59,6 +59,10 @@ defmodule Hyperex.Hypercard.Stack do
     end
   end
 
+  def number_of_cards_or_backgrounds(stack, kind) do
+    {:ok, Enum.count(stack.cards, fn card -> card.kind == kind end)}
+  end
+
   def find_card_or_background(stack, kind, query) do
     IO.puts("find_card st #{stack.name} k #{kind} q #{inspect(query)}")
 
@@ -92,7 +96,7 @@ defmodule Hyperex.Hypercard.Stack do
           {:ok, card, bkgnd}
         end
       else
-        {:ok, card}
+        {:ok, card, nil}
       end
     end
   end
@@ -118,6 +122,22 @@ defmodule Hyperex.Hypercard.Stack do
 
   def find_card_by_number(stack, kind, number) do
     Enum.find(stack.cards, fn card -> card.kind == kind && card.number == number end)
+  end
+
+  def number_of_parts(_card, background, :background, :any) do
+    {:ok, Enum.count(background.parts)}
+  end
+
+  def number_of_parts(_card, background, :background, kind) do
+    {:ok, Enum.count(background.parts, fn part -> part.kind == kind end)}
+  end
+
+  def number_of_parts(card, _background, :card, :any) do
+    {:ok, Enum.count(card.parts)}
+  end
+
+  def number_of_parts(card, _background, :card, kind) do
+    {:ok, Enum.count(card.parts, fn part -> part.kind == kind end)}
   end
 
   def find_part(card, background, parent_kind, kind, query) do

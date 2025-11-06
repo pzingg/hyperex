@@ -23,8 +23,16 @@ defmodule Hyperex.Hypercard do
     GenServer.call(__MODULE__, {:get_stack, name})
   end
 
+  def number_of_cards(stack_name, kind) do
+    GenServer.call(__MODULE__, {:number_of_cards, stack_name, kind})
+  end
+
   def get_card_or_background(stack_name, kind, query) do
     GenServer.call(__MODULE__, {:get_card_or_background, stack_name, kind, query})
+  end
+
+  def number_of_parts(stack_name, card_id, parent_kind, kind) do
+    GenServer.call(__MODULE__, {:number_of_parts, stack_name, card_id, parent_kind, kind})
   end
 
   def get_part(stack_name, card_id, parent_kind, kind, query) do

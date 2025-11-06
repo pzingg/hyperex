@@ -17,9 +17,49 @@ defmodule Hyperex.Hypercard.Evaluator do
   def error?({:error, _e}), do: true
   def error?(%__MODULE__{error: e}) when not is_nil(e), do: true
   def error?(_), do: false
+
   def set_special(t, ev), do: %__MODULE__{ev | value: %Value{special: t}}
-  def set_value(val, ev), do: %__MODULE__{ev | value: val}
   def set_error(reason, ev), do: %__MODULE__{ev | error: reason}
+
+  def set_value(%Value{} = val, ev), do: %__MODULE__{ev | value: val}
+
+  def set_value(v, ev) when is_binary(v) or is_float(v) or is_integer(v) do
+    make_value(v) |> set_value(ev)
+  end
+
+  def set_value(v, ev), do: set_error("invalid value #{inspect(v)}", ev)
+
+  def make_value(v) when is_binary(v) do
+    ival =
+      case Integer.parse(v) do
+        {i, ""} -> i
+        _ -> nil
+      end
+
+    fval =
+      case Float.parse(v) do
+        {f, ""} -> f
+        _ -> nil
+      end
+
+    %Value{as_string: v, as_integer: ival, as_float: fval}
+  end
+
+  def make_value(v) when is_float(v) do
+    ival = trunc(v)
+
+    if v == ival do
+      ival
+    else
+      nil
+    end
+
+    %Value{as_string: "#{v}", as_integer: ival, as_float: v}
+  end
+
+  def make_value(v) when is_integer(v) do
+    %Value{as_string: "#{v}", as_integer: v, as_float: v + 0.0}
+  end
 
   def push_stack(t, ev) do
     %__MODULE__{ev | value_stack: [t | ev.value_stack]}
@@ -44,17 +84,41 @@ defmodule Hyperex.Hypercard.Evaluator do
 
   def do_eval(ev, t) do
     case t do
-      {:integer, v} -> eval_integer(ev, v)
-      {:float, v} -> eval_float(ev, v)
-      {:string_lit, v} -> eval_string_lit(ev, v)
-      {:stack_part, v, nxt} -> eval_stack_part(ev, v, nxt)
-      {:card_part, v, nxt} -> eval_card_part(ev, v, nxt)
-      {:background_part, v, nxt} -> eval_background_part(ev, v, nxt)
-      {:card_button, v} -> eval_card_button(ev, v)
-      {:card_field, v} -> eval_card_field(ev, v)
-      {:background_button, v} -> eval_background_button(ev, v)
-      {:background_field, v} -> eval_background_field(ev, v)
-      _ -> %__MODULE__{ev | error: "#{elem(t, 0)} unimplemented"}
+      {:integer, v} ->
+        eval_integer(ev, v)
+
+      {:float, v} ->
+        eval_float(ev, v)
+
+      {:string_lit, v} ->
+        eval_string_lit(ev, v)
+
+      {:message_or_var, v} ->
+        eval_message_or_var(ev, v)
+
+      {:stack_part, v, nxt} ->
+        eval_stack_part(ev, v, nxt)
+
+      {:card_part, v, nxt} ->
+        eval_card_part(ev, v, nxt)
+
+      {:background_part, v, nxt} ->
+        eval_background_part(ev, v, nxt)
+
+      {:card_button, v} ->
+        eval_card_button(ev, v)
+
+      {:card_field, v} ->
+        eval_card_field(ev, v)
+
+      {:background_button, v} ->
+        eval_background_button(ev, v)
+
+      {:background_field, v} ->
+        eval_background_field(ev, v)
+
+      _ ->
+        %__MODULE__{ev | error: "#{elem(t, 0)} unimplemented"}
     end
   end
 
@@ -77,36 +141,28 @@ defmodule Hyperex.Hypercard.Evaluator do
     end
   end
 
-  def eval_integer(ev, v) when is_integer(v) do
-    %Value{as_string: "#{v}", as_integer: v, as_float: v + 0.0} |> set_value(ev)
-  end
+  def eval_integer(ev, v) when is_integer(v), do: set_value(v, ev)
+  def eval_float(ev, v) when is_float(v), do: set_value(v, ev)
+  def eval_string_lit(ev, v) when is_binary(v), do: set_value(v, ev)
 
-  def eval_float(ev, v) when is_float(v) do
-    ival = trunc(v)
+  def eval_message_or_var(ev, v) do
+    ev =
+      cond do
+        is_tuple(v) -> do_eval(ev, v)
+        is_binary(v) -> set_value(v, ev)
+        true -> set_error("not a string or expression: #{inspect(v)}", ev)
+      end
 
-    if v == ival do
-      ival
+    if error?(ev) do
+      ev
     else
-      nil
+      res = Context.get_variable(ev.context, ev.value.as_string)
+
+      case res do
+        v when is_binary(v) -> set_value(v, ev)
+        _ -> set_error("variable #{ev.value.as_string} not found", ev)
+      end
     end
-
-    %Value{as_string: "#{v}", as_integer: ival, as_float: v} |> set_value(ev)
-  end
-
-  def eval_string_lit(ev, v) when is_binary(v) do
-    ival =
-      case Integer.parse(v) do
-        {i, ""} -> i
-        _ -> nil
-      end
-
-    fval =
-      case Float.parse(v) do
-        {f, ""} -> f
-        _ -> nil
-      end
-
-    %Value{as_string: v, as_integer: ival, as_float: fval} |> set_value(ev)
   end
 
   def eval_stack_part(ev, v, nxt) do
