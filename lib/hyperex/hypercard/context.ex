@@ -122,8 +122,7 @@ defmodule Hyperex.Hypercard.Context do
         error
 
       {:ok, stack, _} ->
-        card_id = default_card_id(ctx, card_id)
-        res = Stack.find_card_or_background(stack, :card, id: card_id)
+        res = get_default_card_or_background(ctx, stack, card_id, parent_kind)
 
         case res do
           {:error, _} = error ->
@@ -143,8 +142,7 @@ defmodule Hyperex.Hypercard.Context do
         error
 
       {:ok, stack, _} ->
-        card_id = default_card_id(ctx, card_id)
-        res = Stack.find_card_or_background(stack, :card, id: card_id)
+        res = get_default_card_or_background(ctx, stack, card_id, parent_kind)
 
         case res do
           {:error, _} = error ->
@@ -154,5 +152,21 @@ defmodule Hyperex.Hypercard.Context do
             Stack.find_part(card, background, parent_kind, kind, query)
         end
     end
+  end
+
+  def get_default_card_or_background(ctx, stack, card_id, :card) do
+    card_id = default_card_id(ctx, card_id)
+    Stack.find_card_or_background(stack, :card, id: card_id)
+  end
+
+  # Background of current card, card and background returned
+  def get_default_card_or_background(ctx, stack, 0, :background) do
+    card_id = default_card_id(ctx, 0)
+    Stack.find_card_or_background(stack, :card, id: card_id)
+  end
+
+  # Background by id, no card returned
+  def get_default_card_or_background(_ctx, stack, card_id, :background) do
+    Stack.find_card_or_background(stack, :background, id: card_id)
   end
 end

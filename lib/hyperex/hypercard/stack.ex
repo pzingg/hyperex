@@ -84,20 +84,26 @@ defmodule Hyperex.Hypercard.Stack do
           end
       end
 
-    if is_nil(card) do
-      {:error, :card_not_found}
-    else
-      if kind == :card do
-        bkgnd = find_card_by_id(stack, :background, card.background)
+    case kind do
+      :card ->
+        if is_nil(card) do
+          {:error, :card_not_found}
+        else
+          bkgnd = find_card_by_id(stack, :background, card.background)
 
-        if is_nil(bkgnd) do
+          if is_nil(bkgnd) do
+            {:error, :background_not_found}
+          else
+            {:ok, card, bkgnd}
+          end
+        end
+
+      :background ->
+        if is_nil(card) do
           {:error, :background_not_found}
         else
-          {:ok, card, bkgnd}
+          {:ok, nil, card}
         end
-      else
-        {:ok, card, nil}
-      end
     end
   end
 
