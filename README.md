@@ -35,3 +35,11 @@ and just gladly ate up the "field" part of the string. I inserted a
 of the rule that had an `opt`. This also may require appending a space 
 character to the end of all scripts (or to the ends of each line in a
 script).
+
+## Message passing
+
+When buttons and fields are layered on top of each other, mouse messages are
+sent only to the closest one. Background buttons and fields can never overlay
+those belonging to the card. Both background fields and card fields precede the
+card in the message-passing hierarchy even though the background itself
+comes after the card.

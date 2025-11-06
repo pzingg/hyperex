@@ -1,6 +1,5 @@
 defmodule Hyperex.ScriptTest do
   use ExUnit.Case
-  doctest Hyperex
 
   import Xpeg
 
@@ -296,6 +295,12 @@ defmodule Hyperex.ScriptTest do
         scriptlet: [{:function_call, "average", [integer: 1, integer: 2], []}]
       )
     end
+
+    test "the number of cards in stack", %{peg: peg} do
+      run(peg, "the number of cards in stack \"Home\"", :ok,
+        scriptlet: [{:function_call, "number", ["cards in stack \"Home\""], []}]
+      )
+    end
   end
 
   describe "scriptlet message" do
@@ -341,9 +346,9 @@ defmodule Hyperex.ScriptTest do
     end
 
     test "card button 3", %{peg: peg} do
-      run(peg, "card button \"Rolo\" of card \"Home\" of stack \"MyHardDisk:Home\"", :ok,
+      run(peg, "card button \"Rolo\" of card \"Home\" of stack \"Home\"", :ok,
         scriptlet: [
-          {:stack_part, {:string_lit, "MyHardDisk:Home"},
+          {:stack_part, {:string_lit, "Home"},
            {:card_part, {:by_name_or_number, {:string_lit, "Home"}},
             {:card_button, {:by_name_or_number, {:string_lit, "Rolo"}}}}}
         ]

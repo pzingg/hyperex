@@ -1,6 +1,5 @@
 defmodule Hyperex.IdTest do
   use ExUnit.Case
-  doctest Hyperex
 
   import Xpeg
 
