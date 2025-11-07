@@ -32,7 +32,7 @@ defmodule Hyperex.Grammar do
 
                  :scriptlet <-
                    :statement_list *
-                     fn [stmnts | _] -> [scriptlet: elem(stmnts, 1)] end
+                     fn [_statement_list | rest] -> [scriptlet: rest] end
 
                  ### All the rest
                  :statement_list <-
@@ -44,7 +44,17 @@ defmodule Hyperex.Grammar do
                            [in: :statement, reverse: true, extract: true]
                          ])
 
-                       [{:statements, stmnts} | rest]
+                       n = Enum.count(stmnts)
+
+                       cs =
+                         if n == 0 do
+                           [{:statement_list, 0} | rest]
+                         else
+                           [{:statement_list, n} | stmnts] ++ rest
+                         end
+
+                       IO.inspect(cs, label: :statement_list)
+                       cs
                      end
 
                  :statement_kind <-
@@ -61,14 +71,14 @@ defmodule Hyperex.Grammar do
 
                  :statement <-
                    :+ * :statement_kind *
-                     fn [e | cs] -> [{:statement, e} | cs] end
+                     fn cs -> [{:statement, Enum.count(cs)} | cs] end
 
                  :expr_list <- :expr * star(:+ * "," * :+ * :expr)
 
                  :expr <- :expr_top | :variable
 
                  # Put factor first to avoid collision of negative :float
-                 :term_b10 <- :factor | :prefix_b10
+                 :term_b10 <- :grouping | :factor | :prefix_b10
                  :term_b9 <- :term_b10 * star(:+ * :infix_b9)
                  :term_b8 <- :term_b9 * star(:+ * :infix_b8)
                  :term_b7 <- :term_b8 * star(:+ * :infix_b7)
@@ -79,9 +89,15 @@ defmodule Hyperex.Grammar do
                  :term_b2 <- :term_b3 * star(:+ * :infix_b2)
                  :expr_top <- :+ * :term_b2 * :+ * star(:+ * :infix_b1)
 
+                 :grouping <-
+                   "(" * :+ * :expr * :+ * ")" *
+                     fn cs ->
+                       IO.inspect(cs, label: :grouping)
+                       cs
+                     end
+
                  :factor <-
-                   "(" * :+ * :expr * :+ * ")"
-                   | :constant
+                   :constant
                    | :float
                    | :integer
                    | :chunk
@@ -197,22 +213,22 @@ defmodule Hyperex.Grammar do
                      opt("-") *
                        (opt("0") * "." * +Digit | +Digit * "." * star(Digit)) *
                        opt(("e" | "E") * opt("-" | "+") * +Digit)
-                   ) * fn [v | cs] -> [{:float, v} | cs] end
+                   ) * fn [v | cs] -> [{:float, 0, v} | cs] end
 
                  :integer <-
                    int("0" | opt("-") * {~c"1"..~c"9"} * star(Digit)) *
-                     fn [v | cs] -> [{:integer, v} | cs] end
+                     fn [v | cs] -> [{:integer, 0, v} | cs] end
 
                  :single_quoted <-
                    str(star("'" * "'" | 1 - "'")) *
                      fn [s | cs] ->
-                       [{:string_lit, String.replace(s, "''", "'")} | cs]
+                       [{:string_lit, 0, String.replace(s, "''", "'")} | cs]
                      end
 
                  :double_quoted <-
                    str(star("\"" * "\"" | 1 - "\"")) *
                      fn [s | cs] ->
-                       [{:string_lit, String.replace(s, "\"\"", "\"")} | cs]
+                       [{:string_lit, 0, String.replace(s, "\"\"", "\"")} | cs]
                      end
 
                  :string_lit <- "'" * :single_quoted * "'" | "\"" * :double_quoted * "\""
@@ -544,19 +560,20 @@ defmodule Hyperex.Grammar do
                    :+ * :of * Sp * (:card_part | :background_part) *
                      fn cs ->
                        case cs do
-                         [{:stack_card, {:stack, stack}, {:card, card}}, part | rest] ->
-                           [{:stack_part, stack, {:card_part, card, part}} | rest]
+                         [{:stack_card, {:stack, _, stack}, {:card, _, card}}, part | rest] ->
+                           [{:stack_part, 1, stack}, {:card_part, 1, card}, part | rest]
 
-                         [{:stack_card, {:stack, stack}, {:background, bkgnd}}, part | rest] ->
-                           [{:stack_part, stack, {:background_part, bkgnd, part}} | rest]
+                         [{:stack_card, {:stack, _, stack}, {:background, _, bkgnd}}, part | rest] ->
+                           [{:stack_part, 1, stack}, {:background_part, 1, bkgnd}, part | rest]
 
-                         [{:card, card}, part | rest] ->
-                           [{:card_part, card, part} | rest]
+                         [{:card, _, card}, part | rest] ->
+                           [{:card_part, 1, card}, part | rest]
 
-                         [{:background, bkgnd}, part | rest] ->
-                           [{:background_part, bkgnd, part} | rest]
+                         [{:background, _, bkgnd}, part | rest] ->
+                           [{:background_part, 1, bkgnd}, part | rest]
 
                          _ ->
+                           IO.inspect(cs, label: :of_card_or_background)
                            cs
                        end
                      end
@@ -569,11 +586,11 @@ defmodule Hyperex.Grammar do
 
                  :named_stack <-
                    "stack" * Sp * :expr *
-                     fn [ex | cs] -> [{:stack, ex} | cs] end
+                     fn [ex | cs] -> [{:stack, 0, ex} | cs] end
 
                  :this_stack <-
                    opt("this" * Sp) * "stack" *
-                     fn cs -> [{:stack, :this} | cs] end
+                     fn cs -> [{:stack, 0, :this} | cs] end
 
                  ### Window part
                  :window_part <- :id_window | opt("the" * Sp) * (:system_window | :card_window)
@@ -594,12 +611,12 @@ defmodule Hyperex.Grammar do
                  ### Card "part" part
                  :card_part_part <-
                    :card * Sp * "part" * Sp * :expr *
-                     fn [ex | cs] -> [{:card_part, ex} | cs] end
+                     fn [ex | cs] -> [{:card_part, 1}, ex | cs] end
 
                  ### Background "part" part
                  :background_part_part <-
                    :background * Sp * "part" * Sp * :expr *
-                     fn [ex | cs] -> [{:background_part, ex} | cs] end
+                     fn [ex | cs] -> [{:background_part, 1}, ex | cs] end
 
                  ### Button part, can start with :card or :background
                  :button_part <-
@@ -608,13 +625,13 @@ defmodule Hyperex.Grammar do
                  :button_by_position <-
                    str(:position) * Sp * :background_or_card_button *
                      fn [type, pos | cs] ->
-                       [{type, {:by_position, pos}} | cs]
+                       [{type, 0, {:by_position, pos}} | cs]
                      end
 
                  :button_by_id_or_number <-
                    :background_or_card_button * Sp * :by_id_or_number *
                      fn [id, type | cs] ->
-                       [{type, id} | cs]
+                       [{type, 0, id} | cs]
                      end
 
                  :background_or_card_button <- :background_button | :card_button
@@ -635,13 +652,13 @@ defmodule Hyperex.Grammar do
                  :field_by_position <-
                    str(:position) * Sp * :background_or_card_field *
                      fn [type, pos | cs] ->
-                       [{type, {:by_position, pos}} | cs]
+                       [{type, 0, {:by_position, pos}} | cs]
                      end
 
                  :field_by_id_or_number <-
                    :background_or_card_field * Sp * :by_id_or_number *
                      fn [id, type | cs] ->
-                       [{type, id} | cs]
+                       [{type, 0, id} | cs]
                      end
 
                  :background_field <-
@@ -656,13 +673,13 @@ defmodule Hyperex.Grammar do
                  :card_by_position <-
                    str(:position) * Sp * :card *
                      fn [pos | cs] ->
-                       [{:card, {:by_position, pos}} | cs]
+                       [{:card, 0, {:by_position, pos}} | cs]
                      end
 
                  :card_by_id <-
                    :card * Sp * :by_id_or_number *
                      fn [pos | cs] ->
-                       [{:card, pos} | cs]
+                       [{:card, 0, pos} | cs]
                      end
 
                  :specific_card <-
@@ -671,7 +688,7 @@ defmodule Hyperex.Grammar do
 
                  :this_card <-
                    opt("this" * Sp) * :card *
-                     fn cs -> [{:card, :this} | cs] end
+                     fn cs -> [{:card, 0, :this} | cs] end
 
                  ### Background part
                  :background_part <-
@@ -680,13 +697,13 @@ defmodule Hyperex.Grammar do
                  :background_by_position <-
                    str(:position) * Sp * :background *
                      fn [pos | cs] ->
-                       [{:background, {:by_position, pos}} | cs]
+                       [{:background, 0, {:by_position, pos}} | cs]
                      end
 
                  :background_by_id <-
                    :background * Sp * :by_id_or_number *
                      fn [pos | cs] ->
-                       [{:background, pos} | cs]
+                       [{:background, 0, pos} | cs]
                      end
 
                  :specific_background <-
@@ -695,19 +712,25 @@ defmodule Hyperex.Grammar do
 
                  :this_background <-
                    opt("this" * Sp) * :background *
-                     fn cs -> [{:background, :this} | cs] end
+                     fn cs -> [{:background, 0, :this} | cs] end
 
                  ### Expression operators, lowest to highest binding power
                  :infix_b1 <-
-                   "or" * :+ * :expr *
-                     fn [b, a | cs] ->
-                       [{:or, [a, b]} | cs]
+                   str("or") * :+ * :expr *
+                     fn cs ->
+                       {_op, a_b_rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_infix_op, [cs])
+
+                       [{:or, 2} | a_b_rest]
                      end
 
                  :infix_b2 <-
-                   "and" * :+ * :term_b2 *
-                     fn [b, a | cs] ->
-                       [{:and, [a, b]} | cs]
+                   str("and") * :+ * :term_b2 *
+                     fn cs ->
+                       {_op, a_b_rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_infix_op, [cs])
+
+                       [{:and, 2} | a_b_rest]
                      end
 
                  # equality
@@ -718,8 +741,11 @@ defmodule Hyperex.Grammar do
 
                  :infix_b3 <-
                    (:op_not_equals | :op_equals) * :+ * :term_b3 *
-                     fn [b, op, a | cs] ->
-                       [{op, [a, b]} | cs]
+                     fn cs ->
+                       {op, a_b_rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_infix_op, [cs])
+
+                       [{op, 2} | a_b_rest]
                      end
 
                  # comparisons
@@ -745,55 +771,72 @@ defmodule Hyperex.Grammar do
                      | :op_in
                      | :op_is_type
                    ) * :+ * :term_b4 *
-                     fn [b, op, a | cs] ->
+                     fn cs ->
+                       {op, a_b_rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_infix_op, [cs])
+
                        case op do
-                         ">" -> [{:gt, [a, b]} | cs]
-                         "≥" -> [{:gte, [a, b]} | cs]
-                         ">=" -> [{:gte, [a, b]} | cs]
-                         "<" -> [{:lt, [a, b]} | cs]
-                         "≤" -> [{:gte, [a, b]} | cs]
-                         "<=" -> [{:gte, [a, b]} | cs]
-                         "contains" -> [{:contains, [a, b]} | cs]
-                         _ -> [{op, [a, b]} | cs]
+                         ">" -> [{:gt, 2} | a_b_rest]
+                         "≥" -> [{:gte, 2} | a_b_rest]
+                         ">=" -> [{:gte, 2} | a_b_rest]
+                         "<" -> [{:lt, 2} | a_b_rest]
+                         "≤" -> [{:gte, 2} | a_b_rest]
+                         "<=" -> [{:gte, 2} | a_b_rest]
+                         "contains" -> [{:contains, 2} | a_b_rest]
+                         _ -> [{op, 2} | a_b_rest]
                        end
                      end
 
                  # concat, concat_ws
                  :infix_b5 <-
                    str("&&" | "&") * :+ * :term_b5 *
-                     fn [b, op, a | cs] ->
+                     fn cs ->
+                       {op, a_b_rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_infix_op, [cs])
+
                        case op do
-                         "&&" -> [{:concat_ws, [a, b]} | cs]
-                         "&" -> [{:concat, [a, b]} | cs]
+                         "&&" -> [{:concat_ws, 2} | a_b_rest]
+                         "&" -> [{:concat, 2} | a_b_rest]
                        end
                      end
 
                  # add, sub
                  :infix_b6 <-
                    str({~c"+", ~c"-"}) * :+ * :term_b6 *
-                     fn [b, op, a | cs] ->
+                     fn cs ->
+                       {op, a_b_rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_infix_op, [cs])
+
                        case op do
-                         "+" -> [{:add, [a, b]} | cs]
-                         "-" -> [{:sub, [a, b]} | cs]
+                         "+" -> [{:add, 2} | a_b_rest]
+                         "-" -> [{:sub, 2} | a_b_rest]
                        end
                      end
 
                  # mul, div, mod, div_trunc
                  :infix_b7 <-
                    str("*" | "/" | "div" | "mod") * :+ * :term_b7 *
-                     fn [b, op, a | cs] ->
+                     fn cs ->
+                       {op, a_b_rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_infix_op, [cs])
+
                        case op do
-                         "*" -> [{:mul, [a, b]} | cs]
-                         "/" -> [{:div, [a, b]} | cs]
-                         "mod" -> [{:mod, [a, b]} | cs]
-                         "div" -> [{:div_trunc, [a, b]} | cs]
+                         "*" -> [{:mul, 2} | a_b_rest]
+                         "/" -> [{:div, 2} | a_b_rest]
+                         "mod" -> [{:mod, 2} | a_b_rest]
+                         "div" -> [{:div_trunc, 2} | a_b_rest]
                        end
                      end
 
                  # pow
                  :infix_b8 <-
                    str("^") * :+ * :term_b8 *
-                     fn [b, _op, a | cs] -> [{:pow, [a, b]} | cs] end
+                     fn cs ->
+                       {_op, a_b_rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_infix_op, [cs])
+
+                       [{:pow, 2} | a_b_rest]
+                     end
 
                  # within
                  :op_not_within <-
@@ -803,8 +846,11 @@ defmodule Hyperex.Grammar do
 
                  :infix_b9 <-
                    (:op_not_within | :op_within) * :+ * :term_b9 *
-                     fn [b, op, a | cs] ->
-                       [{op, [a, b]} | cs]
+                     fn cs ->
+                       {op, a_b_rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :split_infix_op, [cs])
+
+                       [{op, 2} | a_b_rest]
                      end
 
                  # exists, not, negate
@@ -817,11 +863,15 @@ defmodule Hyperex.Grammar do
 
                  :prefix_b10 <-
                    (str("-" | "not") | :op_not_exists | :op_exists) * :+ * :term_b10 *
-                     fn [x, op | cs] ->
+                     fn [x, op | rest] = cs ->
+                       IO.puts(
+                         "prefix_b10 x #{inspect(x)} op #{inspect(op)} rest #{inspect(rest)}"
+                       )
+
                        case op do
-                         "-" -> [{:negate, [x]} | cs]
-                         "not" -> [{:not, [x]} | cs]
-                         _ -> [{op, [x]} | cs]
+                         "-" -> [{:negate, 1}, x | rest]
+                         "not" -> [{:not, 1}, x | rest]
+                         _ -> [{op, 1}, x | rest]
                        end
                      end
 
@@ -895,20 +945,20 @@ defmodule Hyperex.Grammar do
                        {stmnts, [test | rest]} =
                          Kernel.apply(Hyperex.Grammar.Helpers, :collect_tuples, [
                            cs,
-                           [in: [:statement, :statements]]
+                           [in: [:statement, :statement_list]]
                          ])
 
                        case stmnts do
                          [{:statement, if_path}] ->
                            [{:if, test, [if_path], []} | rest]
 
-                         [{:statements, if_path}] ->
+                         [{:statement_list, if_path}] ->
                            [{:if, test, if_path, []} | rest]
 
                          [{:statement, else_path}, {:statement, if_path}] ->
                            [{:if, test, [if_path], [else_path]} | rest]
 
-                         [{:statements, else_path}, {:statements, if_path}] ->
+                         [{:statement_list, else_path}, {:statement_list, if_path}] ->
                            [{:if, test, if_path, else_path} | rest]
                        end
                      end
@@ -948,7 +998,7 @@ defmodule Hyperex.Grammar do
                  :repeat <-
                    "repeat" * Sp * :repeat_range * +Nl * :+ * :statement_list * :+ *
                      "end" * Sp * "repeat" *
-                     fn [{:statements, stmnts}, rep | cs] ->
+                     fn [{:statement_list, stmnts}, rep | cs] ->
                        rep =
                          case rep do
                            {:repeat_until, _, ex} ->
@@ -1080,7 +1130,7 @@ defmodule Hyperex.Grammar do
                        {handler, rest} =
                          Kernel.apply(Hyperex.Grammar.Helpers, :collect_tuples, [
                            cs,
-                           [in: [:params, :statements, :handler_name]]
+                           [in: [:params, :statement_list, :handler_name]]
                          ])
 
                        {name, params, stmnts} =
@@ -1088,7 +1138,7 @@ defmodule Hyperex.Grammar do
                            case elem do
                              {:handler_name, name} -> {name, p, s}
                              {:params, params} -> {n, params, s}
-                             {:statements, statement_list} -> {n, p, statement_list}
+                             {:statement_list, statement_list} -> {n, p, statement_list}
                            end
                          end)
 
@@ -1104,7 +1154,7 @@ defmodule Hyperex.Grammar do
                        {function, rest} =
                          Kernel.apply(Hyperex.Grammar.Helpers, :collect_tuples, [
                            cs,
-                           [in: [:params, :statements, :function_name]]
+                           [in: [:params, :statement_list, :function_name]]
                          ])
 
                        {name, params, stmnts} =
@@ -1112,7 +1162,7 @@ defmodule Hyperex.Grammar do
                            case elem do
                              {:function_name, name} -> {name, p, s}
                              {:params, params} -> {n, params, s}
-                             {:statements, statement_list} -> {n, p, statement_list}
+                             {:statement_list, statement_list} -> {n, p, statement_list}
                            end
                          end)
 
