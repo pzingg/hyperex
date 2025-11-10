@@ -43,3 +43,8 @@ sent only to the closest one. Background buttons and fields can never overlay
 those belonging to the card. Both background fields and card fields precede the
 card in the message-passing hierarchy even though the background itself
 comes after the card.
+
+
+Assume a reverse-Polish AST that is an Elixir list of 3-tuples, where the first element in each tuple is a tag (atom), the second element is an integer representing the count of following tuple groups required for an operation of the tuple, and the third element holds optional data. So for example, the expression 1 + 4 / 2 would be encoded as [{:add, 2, nil}, {:int, 0, 1}, {:div, 2, nil}, {:int, 0, 4}, {:int, 0, 2}] 
+
+Compose an efficient Elixir function that would transform this into a list of 2-tuples with the same number of items as the original list, but where each tuple now has the total "length" of the the operation, and the data. For the example above, the function would produce [{:add, 5}, {:int, 1}, {:div, 3}, {:int, 1}, {:int, 1}]

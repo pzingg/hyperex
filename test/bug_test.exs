@@ -25,61 +25,58 @@ defmodule Hyperex.BugTest do
     assert(result == exp_result)
   end
 
-  @tag :skip
-  test "parses integer", %{peg: peg} do
-    run(peg, "1", :ok, scriptlet: [{:integer, 0, 1}])
-  end
+  describe "scriptlet if" do
+    test "single line", %{peg: peg} do
+      run(peg, "if true then 1", :ok,
+        scriptlet: [{:if, 2}, {:constant, "true"}, {:integer, 0, 1}]
+      )
+    end
 
-  @tag :skip
-  test "parses prefix", %{peg: peg} do
-    run(peg, "not 1", :ok, scriptlet: [{:not, 1}, {:integer, 0, 1}])
-  end
+    test "multiple line", %{peg: peg} do
+      script = """
+      if true then
+        1
+        2
+      end if
+      """
 
-  test "parses compound 1", %{peg: peg} do
-    run(peg, "16 + 4 / 2", :ok,
-      scriptlet: [
-        {:add, 2},
-        {:integer, 0, 16},
-        {:div, 2},
-        {:integer, 0, 4},
-        {:integer, 0, 2}
-      ]
-    )
-  end
+      run(peg, script, :ok,
+        scriptlet: [{:if, 2}, {:constant, 0, "true"}, {:integer, 0, 1}, {:integer, 0, 2}]
+      )
+    end
 
-  test "parses compound 2", %{peg: peg} do
-    run(peg, "16 / 4 + 2", :ok,
-      scriptlet: [
-        {:add, 2},
-        {:div, 2},
-        {:integer, 0, 16},
-        {:integer, 0, 4},
-        {:integer, 0, 2}
-      ]
-    )
-  end
+    test "single line if-else", %{peg: peg} do
+      run(peg, "if true then \"Monday\" else \"Tuesday\"", :ok,
+        scriptlet: [
+          {:if, 3},
+          {:constant, 0, "true"},
+          {:string_lit, 0, "Monday"},
+          {:else, 1},
+          {:string_lit, 0, "Tuesday"}
+        ]
+      )
+    end
 
-  test "parses compound 3", %{peg: peg} do
-    run(peg, "(16 + 4) / 2", :ok,
-      scriptlet: [
-        {:div, 2},
-        {:add, 2},
-        {:integer, 0, 16},
-        {:integer, 0, 4},
-        {:integer, 0, 2}
-      ]
-    )
-  end
+    test "multiple line if-else", %{peg: peg} do
+      script = """
+      if true then
+        "hi"
+      else
+        "bye"
+        2
+      end if
+      """
 
-  test "parses compound 4", %{peg: peg} do
-    run(peg, "16 + (4 / 2)", :ok,
-      scriptlet: [
-        {:add, 2},
-        {:integer, 0, 16},
-        {:div, 2},
-        {:integer, 0, 4},
-        {:integer, 0, 2}
-      ]
-    )
+      run(peg, script, :ok,
+        scriptlet: [
+          {:if, 3},
+          {:constant, 0, "true"},
+          {:string_lit, 0, "hi"},
+          {:else, 2},
+          {:string_lit, 0, "bye"},
+          {:integer, 0, 2}
+        ]
+      )
+    end
   end
 end

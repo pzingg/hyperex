@@ -1,18 +1,54 @@
 defmodule Hyperex.Grammar.Helpers do
-  def split_rest([a | _] = rest) when is_tuple(a) do
-    n_a = elem(a, 1) + 1
-    {Enum.take(rest, n_a), Enum.drop(rest, n_a)}
+  def calculate_lengths(ast) do
+    sum_lengths(Enum.reverse(ast), [], [])
   end
 
-  def split_rest([a | rest]) when is_atom(a), do: {[a], rest}
-  def split_rest(rest), do: {[], rest}
+  # Process from right to left (reversed list), building stack of computed lengths
+  defp sum_lengths([], _op_stack, result_stack), do: result_stack
 
-  def split_infix_op(cs) do
-    IO.puts("split_infix_op cs #{inspect(cs)}")
-    {b, [op | rest]} = Enum.split_while(cs, fn c -> is_tuple(c) end)
+  defp sum_lengths([item | rest], op_stack, result_stack) when is_tuple(item) do
+    {length, op_stack} =
+      case elem(item, 1) do
+        0 ->
+          # Leaf node: length is 1, push to stack
+          {1, op_stack}
 
-    {a, rest} = split_rest(rest)
-    {op, a ++ b ++ rest}
+        count ->
+          # Operator: pop count operands from stack, calculate total length
+          {operands, rest} = Enum.split(op_stack, count)
+          {1 + Enum.sum(operands), rest}
+      end
+
+    sum_lengths(rest, [length | op_stack], [{item, length} | result_stack])
+  end
+
+  # Handle encapsulated list
+  defp sum_lengths([item | rest], op_stack, result_stack) when is_list(item) do
+    sum_lengths(rest, [1 | op_stack], [{item, 1} | result_stack])
+  end
+
+  # Handle non-tuple (i.e. raw string) item
+  defp sum_lengths([item | rest], op_stack, result_stack) do
+    sum_lengths(rest, [1 | op_stack], [{item, 1} | result_stack])
+  end
+
+  def chunk_captures(cs, n) do
+    lengths = calculate_lengths(cs)
+
+    {captures, rest} =
+      Enum.reduce_while(0..(n - 1), {[], lengths}, fn _pass, {acc, rest} ->
+        case rest do
+          [] ->
+            {:halt, {acc, rest}}
+
+          [{_tup, len} | _] ->
+            {items, rest} = Enum.split(rest, len)
+            items = Enum.map(items, fn {tup, _len} -> tup end)
+            {:cont, {[items | acc], rest}}
+        end
+      end)
+
+    {Enum.reverse(captures), Enum.map(rest, fn {tup, _len} -> tup end)}
   end
 
   def collect_tuples(cs, opts) do
@@ -22,42 +58,35 @@ defmodule Hyperex.Grammar.Helpers do
         tags -> fn c -> is_tuple(c) && elem(c, 0) in List.wrap(tags) end
       end
 
-    IO.puts("collect_tuples #{inspect(cs)}, #{inspect(opts)}")
+    lengths = calculate_lengths(cs)
 
-    {_, tuples, rest} =
-      Enum.reduce(cs, {0, [], []}, fn c, {n, acc, r} ->
-        if n > 0 do
-          IO.puts("#{n} > 0, collecting #{inspect(c)}")
+    {captures, rest} =
+      Enum.reduce_while(0..999, {[], lengths}, fn _pass, {acc, rest} ->
+        case rest do
+          [] ->
+            {:halt, {acc, rest}}
 
-          {n - 1, [c | acc], r}
-        else
-          if fun.(c) do
-            n = elem(c, 1)
-            IO.puts("#{inspect(c)} true, will collect #{n} following")
-
-            if Keyword.get(opts, :extract, false) do
-              {n, acc, r}
+          [{tup, len} | _] ->
+            if fun.(tup) do
+              {items, rest} = Enum.split(rest, len)
+              items = Enum.map(items, fn {tup, _len} -> tup end)
+              {:cont, {[items | acc], rest}}
             else
-              {n, [c | acc], r}
+              {:halt, {acc, rest}}
             end
-          else
-            IO.puts("#{inspect(c)} false, adding to rest")
-
-            {0, acc, [c | r]}
-          end
         end
       end)
 
-    tuples =
+    captures =
       if Keyword.get(opts, :reverse, false) do
-        Enum.reverse(tuples)
+        captures
       else
-        tuples
+        Enum.reverse(captures)
       end
 
-    rest = Enum.reverse(rest)
-    IO.puts("after collect_tuples #{inspect(tuples)}, #{inspect(rest)}")
-
-    {tuples, rest}
+    {Enum.count(captures), List.flatten(captures), Enum.map(rest, fn {tup, _len} -> tup end)}
   end
+
+  def wrap([a | _rest] = cs) when is_list(a), do: cs
+  def wrap(cs), do: [cs]
 end

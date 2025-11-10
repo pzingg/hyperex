@@ -18,13 +18,13 @@ defmodule Hyperex.Grammar do
                  :script <-
                    :script_elem * star(+Nl * :script_elem) * ((&Eoi) | +Nl) *
                      fn cs ->
-                       {elems, rest} =
+                       {n, elems, rest} =
                          Kernel.apply(Hyperex.Grammar.Helpers, :collect_tuples, [
                            cs,
                            [in: [:handler, :function], reverse: true]
                          ])
 
-                       [{:script, elems} | rest]
+                       [{:script, n} | List.flatten(elems ++ rest)]
                      end
 
                  :script_elem_kind <- :handler | :function_def
@@ -32,29 +32,20 @@ defmodule Hyperex.Grammar do
 
                  :scriptlet <-
                    :statement_list *
-                     fn [_statement_list | rest] -> [scriptlet: rest] end
+                     fn cs -> [scriptlet: List.flatten(cs)] end
 
                  ### All the rest
                  :statement_list <-
                    :statement * star(+Nl * :statement) * ((&Eoi) | +Nl) *
                      fn cs ->
-                       {stmnts, rest} =
+                       # IO.inspect(cs, label: :statement_list)
+                       {_n, tuples, rest} =
                          Kernel.apply(Hyperex.Grammar.Helpers, :collect_tuples, [
                            cs,
-                           [in: :statement, reverse: true, extract: true]
+                           [reverse: true]
                          ])
 
-                       n = Enum.count(stmnts)
-
-                       cs =
-                         if n == 0 do
-                           [{:statement_list, 0} | rest]
-                         else
-                           [{:statement_list, n} | stmnts] ++ rest
-                         end
-
-                       IO.inspect(cs, label: :statement_list)
-                       cs
+                       tuples ++ rest
                      end
 
                  :statement_kind <-
@@ -71,9 +62,31 @@ defmodule Hyperex.Grammar do
 
                  :statement <-
                    :+ * :statement_kind *
-                     fn cs -> [{:statement, Enum.count(cs)} | cs] end
+                     fn cs ->
+                       # IO.inspect(cs, label: :statement)
+                       {_n, _stmnts, rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :collect_tuples, [
+                           cs,
+                           [in: :statement, reverse: true]
+                         ])
 
-                 :expr_list <- :expr * star(:+ * "," * :+ * :expr)
+                       # Just remove the statements
+                       rest
+                     end
+
+                 :expr_chain <-
+                   :+ * "," * :+ * :expr *
+                     fn cs ->
+                       IO.inspect(cs, label: :expr_chain)
+                       cs
+                     end
+
+                 :expr_list <-
+                   :expr * star(:expr_chain) *
+                     fn cs ->
+                       IO.inspect(cs, label: :expr_chain)
+                       cs
+                     end
 
                  :expr <- :expr_top | :variable
 
@@ -90,11 +103,7 @@ defmodule Hyperex.Grammar do
                  :expr_top <- :+ * :term_b2 * :+ * star(:+ * :infix_b1)
 
                  :grouping <-
-                   "(" * :+ * :expr * :+ * ")" *
-                     fn cs ->
-                       IO.inspect(cs, label: :grouping)
-                       cs
-                     end
+                   "(" * :+ * :expr * :+ * ")"
 
                  :factor <-
                    :constant
@@ -115,22 +124,22 @@ defmodule Hyperex.Grammar do
                  :message_with_params <-
                    str(:message_name | :id) * Sp * :expr_list *
                      fn cs ->
-                       {exlist, [name | rest]} =
+                       {n, exlist, [name | rest]} =
                          Kernel.apply(Hyperex.Grammar.Helpers, :collect_tuples, [
                            cs,
                            [reverse: true]
                          ])
 
-                       [{:message, name, exlist} | rest]
+                       [{:message, n, name} | exlist ++ rest]
                      end
 
                  :message_or_var <-
                    str(:message_name | :id) *
-                     fn [name | cs] -> [{:message_or_var, name} | cs] end
+                     fn [name | cs] -> [{:message_or_var, 0, name} | cs] end
 
                  :variable <-
                    str(:message_name | :id) *
-                     fn [name | cs] -> [{:var, name} | cs] end
+                     fn [name | cs] -> [{:var, 0, name} | cs] end
 
                  ### Properties
 
@@ -145,17 +154,17 @@ defmodule Hyperex.Grammar do
                      fn [v | cs] ->
                        format =
                          case v do
-                           "long" -> {:format, :long}
-                           "short" -> {:format, :short}
-                           _ -> {:format, :abbrev}
+                           "long" -> {:format, 0, :long}
+                           "short" -> {:format, 0, :short}
+                           _ -> {:format, 0, :abbrev}
                          end
 
                        [format | cs]
                      end
 
-                 :long_opt <- "long" * fn cs -> [{:format, :long} | cs] end
+                 :long_opt <- "long" * fn cs -> [{:format, 0, :long} | cs] end
 
-                 :english_opt <- "english" * fn cs -> [{:format, :english} | cs] end
+                 :english_opt <- "english" * fn cs -> [{:format, 0, :english} | cs] end
 
                  :hypercard_property <-
                    str("address")
@@ -166,17 +175,17 @@ defmodule Hyperex.Grammar do
                    :hypercard_property * :+ * opt(opt("of") * :+ * ("HyperCard" | "hypercard")) *
                      fn cs ->
                        case cs do
-                         [name, {:format, _} = fmt | rest] ->
-                           [{:global_property, name, [fmt]} | rest]
+                         [name, {:format, _, fmt} | rest] ->
+                           [{:global_property, 0, name, [format: fmt]} | rest]
 
                          [name | rest] ->
-                           [{:global_property, name, []} | rest]
+                           [{:global_property, 0, name, []} | rest]
                        end
                      end
 
                  :global_system_property <-
                    str(:global_property_name) *
-                     fn [name | cs] -> [{:global_property, name, []} | cs] end
+                     fn [name | cs] -> [{:global_property, 0, name, []} | cs] end
 
                  :object_property_name <-
                    :stack_prop_name
@@ -199,11 +208,11 @@ defmodule Hyperex.Grammar do
                    :object_property * Sp * "of" * Sp * :expr *
                      fn cs ->
                        case cs do
-                         [obj, name, {:format, _} = fmt | rest] ->
-                           [{:object_property, name, obj, [fmt]} | rest]
+                         [obj, name, {:format, _, fmt} | rest] ->
+                           [{:object_property, 1, name, [format: fmt]}, obj | rest]
 
                          [obj, name | rest] ->
-                           [{:object_property, name, obj, []} | rest]
+                           [{:object_property, 1, name, []}, obj | rest]
                        end
                      end
 
@@ -240,10 +249,10 @@ defmodule Hyperex.Grammar do
                        fn [v | cs] ->
                          src =
                            case v do
-                             "each" -> {:container_each}
-                             "target" -> {:container_target}
-                             "selection" -> {:container_selection}
-                             _ -> {:container_it}
+                             "each" -> {:container_each, 0}
+                             "target" -> {:container_target, 0}
+                             "selection" -> {:container_selection, 0}
+                             _ -> {:container_it, 0}
                            end
 
                          [src | cs]
@@ -251,17 +260,17 @@ defmodule Hyperex.Grammar do
 
                  :message_box <-
                    opt("the" * Sp) * ("message" | "msg") * Sp * opt("window" | "box") *
-                     fn cs -> [{:container_message_box} | cs] end
+                     fn cs -> [{:container_message_box, 0} | cs] end
 
                  :menu <-
                    "menu" * Sp * :expr
                    | :position * Sp * "menu" *
-                       fn [mid | cs] -> [{:menu, mid} | cs] end
+                       fn [mid | cs] -> [{:menu, 0, mid} | cs] end
 
                  :menu_item <-
                    ("menuItem" | "menuitem") * Sp * :expr * :+ * "of" * Sp * :menu
                    | :position * Sp * ("menuItem" | "menuitem") * Sp * "of" * Sp * :menu *
-                       fn [{:menu, m}, mid | cs] -> [{:menu_item, mid, m} | cs] end
+                       fn [{:menu, m}, mid | cs] -> [{:menu_item, 1, mid}, m | cs] end
 
                  ### Chunks
 
@@ -275,14 +284,14 @@ defmodule Hyperex.Grammar do
 
                  :of_source <-
                    Sp * :of * :+ * :expr *
-                     fn [src | cs] -> [{:source, src} | cs] end
+                     fn [src | cs] -> [{:source, 0, src} | cs] end
 
                  :lines_chunk <-
                    "lines" * :of_source *
                      fn cs ->
                        case cs do
-                         [{:source, src} | rest] -> [{:chunk, src, :lines} | rest]
-                         _ -> [{:chunk, nil, :lines} | cs]
+                         [{:source, 0, src} | rest] -> [{:lines_chunk, 1} | src ++ rest]
+                         _ -> [{:lines_chunk, 0} | cs]
                        end
                      end
 
@@ -290,22 +299,32 @@ defmodule Hyperex.Grammar do
                    "items" * :of_source *
                      fn cs ->
                        case cs do
-                         [{:source, src} | rest] -> [{:chunk, src, :items} | rest]
-                         _ -> [{:chunk, nil, :items} | cs]
+                         [{:source, 0, src} | rest] -> [{:items_chunk, 1} | src ++ rest]
+                         _ -> [{:items_chunk, 0} | cs]
                        end
                      end
 
                  :line_from_to <-
-                   "line" * :+ * :expr * :+ * "to" * :+ * :expr *
-                     fn [to, from | cs] -> [{:line_chunk, {:range, from, to}} | cs] end
+                   "line" * :+ * :expr * :+ * str("to") * :+ * :expr *
+                     fn cs ->
+                       {[to, _op, from], rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :chunk_captures, [cs, 3])
+
+                       [{:line_chunk, 0, [range_from: from, range_to: to]} | rest]
+                     end
 
                  :line_at <-
                    "line" * :+ * :expr *
-                     fn [pos | cs] -> [{:line_chunk, {:by_position, pos}} | cs] end
+                     fn cs ->
+                       {[pos], rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :chunk_captures, [cs, 1])
+
+                       [{:line_chunk, 0, [by_position: pos]} | rest]
+                     end
 
                  :line_ordinal <-
                    str(:ordinal_value) * Sp * "line" *
-                     fn [ord | cs] -> [{:line_chunk, {:by_position, ord}} | cs] end
+                     fn [ord | cs] -> [{:line_chunk, 0, [by_position: ord]} | cs] end
 
                  :line_spec <-
                    :line_ordinal
@@ -315,54 +334,59 @@ defmodule Hyperex.Grammar do
                  :line_chunk <-
                    :line_spec * :of_source *
                      fn cs ->
-                       IO.inspect(cs, label: :line_chunk)
-
                        case cs do
                          [
-                           {:source, src},
-                           {:line_chunk, line_pos},
-                           {:word_chunk, word_pos},
-                           {:char_chunk, char_pos} | rest
+                           {:source, 0, src},
+                           {:line_chunk, 0, _} = lc,
+                           {:word_chunk, 0, _} = wc,
+                           {:char_chunk, 0, _} = cc | rest
                          ] ->
-                           [
-                             {:chunk, src,
-                              {:line_chunk, line_pos,
-                               {:word_chunk, word_pos, {:char_chunk, char_pos, nil}}}}
-                             | rest
-                           ]
+                           [{:chunk, 4} | src ++ [lc, wc, cc] ++ rest]
 
-                         [{:source, src}, {:line_chunk, line_pos}, {:word_chunk, word_pos} | rest] ->
-                           [
-                             {:chunk, src, {:line_chunk, line_pos, {:word_chunk, word_pos, nil}}}
-                             | rest
-                           ]
+                         [
+                           {:source, 0, src},
+                           {:line_chunk, 0, _} = lc,
+                           {:word_chunk, 0, _} = wc | rest
+                         ] ->
+                           [{:chunk, 3} | src ++ [lc, wc] ++ rest]
 
-                         [{:source, src}, {:line_chunk, line_pos}, {:char_chunk, char_pos} | rest] ->
-                           [
-                             {:chunk, src, {:line_chunk, line_pos, {:char_chunk, char_pos, nil}}}
-                             | rest
-                           ]
+                         [
+                           {:source, 0, src},
+                           {:line_chunk, 0, _} = lc,
+                           {:char_chunk, 0, _} = cc | rest
+                         ] ->
+                           [{:chunk, 3} | src ++ [lc, cc] ++ rest]
 
-                         [{:source, src}, {:line_chunk, pos} | rest] ->
-                           [{:chunk, src, {:line_chunk, pos, nil}} | rest]
+                         [{:source, 0, src}, {:line_chunk, 0, _} = lc | rest] ->
+                           [{:chunk, 2} | src ++ [lc] ++ rest]
 
                          _ ->
-                           IO.puts("line_chunk NOT HANDLED")
+                           IO.puts("line_chunk NOT HANDLED #{inspect(cs)}")
                            cs
                        end
                      end
 
                  :item_from_to <-
-                   "item" * :+ * :expr * :+ * "to" * :+ * :expr *
-                     fn [to, from | cs] -> [{:item_chunk, {:range, from, to}} | cs] end
+                   "item" * :+ * :expr * :+ * str("to") * :+ * :expr *
+                     fn cs ->
+                       {[to, _op, from], rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :chunk_captures, [cs, 3])
+
+                       [{:item_chunk, 0, [range_from: from, range_to: to]} | rest]
+                     end
 
                  :item_at <-
                    "item" * :+ * :expr *
-                     fn [pos | cs] -> [{:item_chunk, {:by_position, pos}} | cs] end
+                     fn cs ->
+                       {[pos], rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :chunk_captures, [cs, 1])
+
+                       [{:item_chunk, 0, [by_position: pos]} | rest]
+                     end
 
                  :item_ordinal <-
                    str(:ordinal_value) * Sp * "item" *
-                     fn [ord | cs] -> [{:item_chunk, {:by_position, ord}} | cs] end
+                     fn [ord | cs] -> [{:item_chunk, 0, [by_position: ord]} | cs] end
 
                  :item_spec <-
                    :item_ordinal
@@ -373,11 +397,12 @@ defmodule Hyperex.Grammar do
                    :item_spec * :of_source *
                      fn cs ->
                        case cs do
-                         [{:source, src}, {:item_chunk, pos} | rest] ->
-                           [{:chunk, src, {:item_chunk, pos}} | rest]
+                         [{:source, 0, src}, {:item_chunk, 0, _} = ic | rest] ->
+                           [{:chunk, 2} | src ++ [ic] ++ rest]
 
                          _ ->
-                           [:item_chunk | cs]
+                           IO.puts("item_chunk NOT HANDLED #{inspect(cs)}")
+                           cs
                        end
                      end
 
@@ -392,35 +417,27 @@ defmodule Hyperex.Grammar do
                        cs
                      end
 
-                 :words_of_line <-
-                   "words" * :of_line *
-                     fn
-                       cs ->
-                         IO.inspect(cs, label: :words_of_line)
-
-                         case cs do
-                           [{:source, {:chunk, src, {:line_chunk, pos, nil}}} | rest] ->
-                             [{:chunk, src, {:line_chunk, pos, :words}} | rest]
-
-                           [{:source, src} | rest] ->
-                             [{:chunk, src, :words} | rest]
-
-                           _ ->
-                             cs
-                         end
-                     end
-
                  :word_from_to <-
-                   "word" * :+ * :expr * :+ * "to" * :+ * :expr *
-                     fn [to, from | cs] -> [{:word_chunk, {:range, from, to}} | cs] end
+                   "word" * :+ * :expr * :+ * str("to") * :+ * :expr *
+                     fn cs ->
+                       {[to, _op, from], rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :chunk_captures, [cs, 3])
+
+                       [{:word_chunk, 0, [range_from: from, range_to: to]} | rest]
+                     end
 
                  :word_at <-
                    "word" * :+ * :expr *
-                     fn [pos | cs] -> [{:word_chunk, {:by_position, pos}} | cs] end
+                     fn cs ->
+                       {[pos], rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :chunk_captures, [cs, 1])
+
+                       [{:word_chunk, 0, [by_position: pos]} | rest]
+                     end
 
                  :word_ordinal <-
                    str(:ordinal_value) * Sp * "word" *
-                     fn [ord | cs] -> [{:word_chunk, {:by_position, ord}} | cs] end
+                     fn [ord | cs] -> [{:word_chunk, 0, [by_position: ord]} | cs] end
 
                  :word_spec <-
                    :word_ordinal
@@ -430,33 +447,20 @@ defmodule Hyperex.Grammar do
                  :word_of_line <-
                    :word_spec * opt(:of_line) *
                      fn cs ->
-                       IO.inspect(cs, label: :word_of_line)
-
                        case cs do
-                         [
-                           {:source, {:chunk, src, {:line_chunk, line_pos}}},
-                           {:word_chunk, word_pos} | rest
-                         ] ->
-                           [
-                             {:chunk, src, {:word_chunk, word_pos, {:line_chunk, line_pos, nil}}}
-                             | rest
-                           ]
+                         [{:source, 0, {:chunk, n}} | rest] ->
+                           [{:chunk, n} | rest]
 
-                         [{:source, src}, {:word_chunk, word_pos} | rest] ->
-                           [{:chunk, src, {:word_chunk, word_pos, nil}} | rest]
-
-                         [{:source, {:chunk, src, sub_chunks}} | rest] ->
-                           [{:chunk, src, sub_chunks} | rest]
+                         [{:source, 0, src}, {:word_chunk, 0, _} = wc | rest] ->
+                           [{:chunk, 2} | src ++ [wc] ++ rest]
 
                          _ ->
-                           IO.puts("word_of_line NOT HANDLED")
+                           IO.puts("word_of_line NOT HANDLED #{inspect(cs)}")
                            cs
                        end
                      end
 
-                 :word_chunk <-
-                   :words_of_line
-                   | :word_of_line
+                 :word_chunk <- :word_of_line
 
                  :of_word_chunk <-
                    Sp * "of" * :word_chunk *
@@ -479,16 +483,26 @@ defmodule Hyperex.Grammar do
                      end
 
                  :char_from_to <-
-                   :character * :+ * :expr * :+ * "to" * :+ * :expr *
-                     fn [to, from | cs] -> [{:char_chunk, {:range, from, to}} | cs] end
+                   :character * :+ * :expr * :+ * str("to") * :+ * :expr *
+                     fn cs ->
+                       {[to, _op, from], rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :chunk_captures, [cs, 3])
+
+                       [{:char_chunk, 0, [range_from: from, range_to: to]} | rest]
+                     end
 
                  :char_at <-
                    :character * :+ * :expr *
-                     fn [pos | cs] -> [{:char_chunk, {:by_position, pos}} | cs] end
+                     fn cs ->
+                       {[pos], rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :chunk_captures, [cs, 1])
+
+                       [{:char_chunk, 0, [by_position: pos]} | rest]
+                     end
 
                  :char_ordinal <-
                    str(:ordinal_value) * Sp * :character *
-                     fn [ord | cs] -> [{:char_chunk, {:by_position, ord}} | cs] end
+                     fn [ord | cs] -> [{:char_chunk, 0, [by_position: ord]} | cs] end
 
                  :char_spec <-
                    :char_ordinal
@@ -498,23 +512,19 @@ defmodule Hyperex.Grammar do
                  :char_of_word <-
                    :char_spec * opt(:of_word) *
                      fn cs ->
-                       IO.inspect(cs, label: :char_of_word)
-
                        case cs do
+                         [{:source, 0}, {:chunk, n} | rest] ->
+                           [{:chunk, n} | rest]
+
                          [
-                           {:source, {:chunk, src, {:word_chunk, word_pos, _}}},
-                           {:char_chunk, char_pos} | rest
+                           {:source, 0, src},
+                           {:word_chunk, 0, _} = wc,
+                           {:char_chunk, 0, _} = cc | rest
                          ] ->
-                           [
-                             {:chunk, src, {:word_chunk, word_pos, {:char_chunk, char_pos, nil}}}
-                             | rest
-                           ]
+                           [{:chunk, 3} | src ++ [wc, cc] ++ rest]
 
-                         [{:source, src}, {:char_chunk, pos} | rest] ->
-                           [{:chunk, src, {:char_chunk, pos, nil}} | rest]
-
-                         [{:source, {:chunk, src, sub_chunks}} | rest] ->
-                           [{:chunk, src, sub_chunks} | rest]
+                         [{:source, 0, src}, {:char_chunk, 0, _} = cc | rest] ->
+                           [{:chunk, 2} | src ++ [cc] ++ rest]
 
                          _ ->
                            IO.puts("char_of_word NOT HANDLED")
@@ -522,9 +532,7 @@ defmodule Hyperex.Grammar do
                        end
                      end
 
-                 :character_chunk <-
-                   :chars_of_word
-                   | :char_of_word
+                 :character_chunk <- :char_of_word
 
                  ### Parts
                  # Order is important, e.g. "opt(:card) :button" before ":card :expr"
@@ -553,17 +561,22 @@ defmodule Hyperex.Grammar do
                  :of_stack <-
                    :+ * :of * Sp * :stack_part *
                      fn [stack, card | cs] ->
-                       [{:stack_card, stack, card} | cs]
+                       [{:stack_card, 2}, stack, card | cs]
                      end
 
                  :of_card_or_background <-
                    :+ * :of * Sp * (:card_part | :background_part) *
                      fn cs ->
                        case cs do
-                         [{:stack_card, {:stack, _, stack}, {:card, _, card}}, part | rest] ->
+                         [{:stack_card, _}, {:stack, _, stack}, {:card, _, card}, part | rest] ->
                            [{:stack_part, 1, stack}, {:card_part, 1, card}, part | rest]
 
-                         [{:stack_card, {:stack, _, stack}, {:background, _, bkgnd}}, part | rest] ->
+                         [
+                           {:stack_card, _},
+                           {:stack, _, stack},
+                           {:background, _, bkgnd},
+                           part | rest
+                         ] ->
                            [{:stack_part, 1, stack}, {:background_part, 1, bkgnd}, part | rest]
 
                          [{:card, _, card}, part | rest] ->
@@ -597,16 +610,16 @@ defmodule Hyperex.Grammar do
 
                  :id_window <-
                    "window" * opt(Sp * "id") * Sp * :expr *
-                     fn [ex | cs] -> [{:id_window, ex} | cs] end
+                     fn [ex | cs] -> [{:id_window, 1}, ex | cs] end
 
                  :system_window <-
                    (str("tool" | "pattern") * Sp * "window"
                     | str("message" | "variable") * Sp * "watcher") *
-                     fn [name | cs] -> [{:system_window, name} | cs] end
+                     fn [name | cs] -> [{:system_window, 0, name} | cs] end
 
                  :card_window <-
                    :card * Sp * "window" *
-                     fn cs -> [:card_window | cs] end
+                     fn cs -> [{:card_window, 0} | cs] end
 
                  ### Card "part" part
                  :card_part_part <-
@@ -625,7 +638,7 @@ defmodule Hyperex.Grammar do
                  :button_by_position <-
                    str(:position) * Sp * :background_or_card_button *
                      fn [type, pos | cs] ->
-                       [{type, 0, {:by_position, pos}} | cs]
+                       [{type, 0, [by_position: pos]} | cs]
                      end
 
                  :button_by_id_or_number <-
@@ -652,7 +665,7 @@ defmodule Hyperex.Grammar do
                  :field_by_position <-
                    str(:position) * Sp * :background_or_card_field *
                      fn [type, pos | cs] ->
-                       [{type, 0, {:by_position, pos}} | cs]
+                       [{type, 0, [by_position: pos]} | cs]
                      end
 
                  :field_by_id_or_number <-
@@ -673,7 +686,7 @@ defmodule Hyperex.Grammar do
                  :card_by_position <-
                    str(:position) * Sp * :card *
                      fn [pos | cs] ->
-                       [{:card, 0, {:by_position, pos}} | cs]
+                       [{:card, 0, [by_position: pos]} | cs]
                      end
 
                  :card_by_id <-
@@ -697,7 +710,7 @@ defmodule Hyperex.Grammar do
                  :background_by_position <-
                    str(:position) * Sp * :background *
                      fn [pos | cs] ->
-                       [{:background, 0, {:by_position, pos}} | cs]
+                       [{:background, 0, [by_position: pos]} | cs]
                      end
 
                  :background_by_id <-
@@ -718,19 +731,19 @@ defmodule Hyperex.Grammar do
                  :infix_b1 <-
                    str("or") * :+ * :expr *
                      fn cs ->
-                       {_op, a_b_rest} =
-                         Kernel.apply(Hyperex.Grammar.Helpers, :split_infix_op, [cs])
+                       {[b, _op, a], rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :chunk_captures, [cs, 3])
 
-                       [{:or, 2} | a_b_rest]
+                       [{:or, 2} | a ++ b ++ rest]
                      end
 
                  :infix_b2 <-
                    str("and") * :+ * :term_b2 *
                      fn cs ->
-                       {_op, a_b_rest} =
-                         Kernel.apply(Hyperex.Grammar.Helpers, :split_infix_op, [cs])
+                       {[b, _op, a], rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :chunk_captures, [cs, 3])
 
-                       [{:and, 2} | a_b_rest]
+                       [{:and, 2} | a ++ b ++ rest]
                      end
 
                  # equality
@@ -742,10 +755,10 @@ defmodule Hyperex.Grammar do
                  :infix_b3 <-
                    (:op_not_equals | :op_equals) * :+ * :term_b3 *
                      fn cs ->
-                       {op, a_b_rest} =
-                         Kernel.apply(Hyperex.Grammar.Helpers, :split_infix_op, [cs])
+                       {[b, [op], a], rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :chunk_captures, [cs, 3])
 
-                       [{op, 2} | a_b_rest]
+                       [{op, 2} | a ++ b ++ rest]
                      end
 
                  # comparisons
@@ -772,18 +785,18 @@ defmodule Hyperex.Grammar do
                      | :op_is_type
                    ) * :+ * :term_b4 *
                      fn cs ->
-                       {op, a_b_rest} =
-                         Kernel.apply(Hyperex.Grammar.Helpers, :split_infix_op, [cs])
+                       {[b, [op], a], rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :chunk_captures, [cs, 3])
 
                        case op do
-                         ">" -> [{:gt, 2} | a_b_rest]
-                         "≥" -> [{:gte, 2} | a_b_rest]
-                         ">=" -> [{:gte, 2} | a_b_rest]
-                         "<" -> [{:lt, 2} | a_b_rest]
-                         "≤" -> [{:gte, 2} | a_b_rest]
-                         "<=" -> [{:gte, 2} | a_b_rest]
-                         "contains" -> [{:contains, 2} | a_b_rest]
-                         _ -> [{op, 2} | a_b_rest]
+                         ">" -> [{:gt, 2} | a ++ b ++ rest]
+                         "≥" -> [{:gte, 2} | a ++ b ++ rest]
+                         ">=" -> [{:gte, 2} | a ++ b ++ rest]
+                         "<" -> [{:lt, 2} | a ++ b ++ rest]
+                         "≤" -> [{:gte, 2} | a ++ b ++ rest]
+                         "<=" -> [{:gte, 2} | a ++ b ++ rest]
+                         "contains" -> [{:contains, 2} | a ++ b ++ rest]
+                         _ -> [{op, 2} | a ++ b ++ rest]
                        end
                      end
 
@@ -791,12 +804,12 @@ defmodule Hyperex.Grammar do
                  :infix_b5 <-
                    str("&&" | "&") * :+ * :term_b5 *
                      fn cs ->
-                       {op, a_b_rest} =
-                         Kernel.apply(Hyperex.Grammar.Helpers, :split_infix_op, [cs])
+                       {[b, [op], a], rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :chunk_captures, [cs, 3])
 
                        case op do
-                         "&&" -> [{:concat_ws, 2} | a_b_rest]
-                         "&" -> [{:concat, 2} | a_b_rest]
+                         "&&" -> [{:concat_ws, 2} | a ++ b ++ rest]
+                         "&" -> [{:concat, 2} | a ++ b ++ rest]
                        end
                      end
 
@@ -804,12 +817,12 @@ defmodule Hyperex.Grammar do
                  :infix_b6 <-
                    str({~c"+", ~c"-"}) * :+ * :term_b6 *
                      fn cs ->
-                       {op, a_b_rest} =
-                         Kernel.apply(Hyperex.Grammar.Helpers, :split_infix_op, [cs])
+                       {[b, [op], a], rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :chunk_captures, [cs, 3])
 
                        case op do
-                         "+" -> [{:add, 2} | a_b_rest]
-                         "-" -> [{:sub, 2} | a_b_rest]
+                         "+" -> [{:add, 2} | a ++ b ++ rest]
+                         "-" -> [{:sub, 2} | a ++ b ++ rest]
                        end
                      end
 
@@ -817,14 +830,14 @@ defmodule Hyperex.Grammar do
                  :infix_b7 <-
                    str("*" | "/" | "div" | "mod") * :+ * :term_b7 *
                      fn cs ->
-                       {op, a_b_rest} =
-                         Kernel.apply(Hyperex.Grammar.Helpers, :split_infix_op, [cs])
+                       {[b, [op], a], rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :chunk_captures, [cs, 3])
 
                        case op do
-                         "*" -> [{:mul, 2} | a_b_rest]
-                         "/" -> [{:div, 2} | a_b_rest]
-                         "mod" -> [{:mod, 2} | a_b_rest]
-                         "div" -> [{:div_trunc, 2} | a_b_rest]
+                         "*" -> [{:mul, 2} | a ++ b ++ rest]
+                         "/" -> [{:div, 2} | a ++ b ++ rest]
+                         "mod" -> [{:mod, 2} | a ++ b ++ rest]
+                         "div" -> [{:div_trunc, 2} | a ++ b ++ rest]
                        end
                      end
 
@@ -832,10 +845,10 @@ defmodule Hyperex.Grammar do
                  :infix_b8 <-
                    str("^") * :+ * :term_b8 *
                      fn cs ->
-                       {_op, a_b_rest} =
-                         Kernel.apply(Hyperex.Grammar.Helpers, :split_infix_op, [cs])
+                       {[b, _op, a], rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :chunk_captures, [cs, 3])
 
-                       [{:pow, 2} | a_b_rest]
+                       [{:pow, 2} | a ++ b ++ rest]
                      end
 
                  # within
@@ -847,10 +860,10 @@ defmodule Hyperex.Grammar do
                  :infix_b9 <-
                    (:op_not_within | :op_within) * :+ * :term_b9 *
                      fn cs ->
-                       {op, a_b_rest} =
-                         Kernel.apply(Hyperex.Grammar.Helpers, :split_infix_op, [cs])
+                       {[b, [op], a], rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :chunk_captures, [cs, 3])
 
-                       [{op, 2} | a_b_rest]
+                       [{op, 2} | a ++ b ++ rest]
                      end
 
                  # exists, not, negate
@@ -863,165 +876,231 @@ defmodule Hyperex.Grammar do
 
                  :prefix_b10 <-
                    (str("-" | "not") | :op_not_exists | :op_exists) * :+ * :term_b10 *
-                     fn [x, op | rest] = cs ->
-                       IO.puts(
-                         "prefix_b10 x #{inspect(x)} op #{inspect(op)} rest #{inspect(rest)}"
-                       )
+                     fn cs ->
+                       {[x, [op]], rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :chunk_captures, [cs, 2])
 
                        case op do
-                         "-" -> [{:negate, 1}, x | rest]
-                         "not" -> [{:not, 1}, x | rest]
-                         _ -> [{op, 1}, x | rest]
+                         "-" -> [{:negate, 1} | x ++ rest]
+                         "not" -> [{:not, 1} | x ++ rest]
+                         _ -> [{op, 1} | x ++ rest]
                        end
                      end
 
                  :parameter_list <-
                    :param * star(:+ * "," * :+ * :param) *
                      fn cs ->
-                       {params, rest} =
+                       {n, params, rest} =
                          Kernel.apply(Hyperex.Grammar.Helpers, :collect_tuples, [
                            cs,
-                           [in: :param, reverse: true, extract: true]
+                           [in: :param, reverse: true]
                          ])
 
-                       [{:params, params} | rest]
+                       [{:params, n} | params ++ rest]
                      end
 
                  :global <-
                    "global" * Sp * :parameter_list *
                      fn cs ->
-                       {params, rest} =
-                         Kernel.apply(Hyperex.Grammar.Helpers, :collect_tuples, [
-                           cs,
-                           [in: :params]
-                         ])
-
-                       case params do
-                         [{:params, params}] -> [{:global, params} | rest]
-                         [] -> [{:global, []} | rest]
+                       case cs do
+                         [{:params, n} | rest] -> [{:global, n} | rest]
+                         rest -> [{:global, 0} | rest]
                        end
                      end
 
-                 :return <-
-                   "return" * opt(Sp * :expr) *
-                     fn cs -> [{:return, cs}] end
+                 :return_value <-
+                   "return" * Sp * :expr * fn cs -> [{:return, 1} | cs] end
+
+                 :empty_return <-
+                   "return" * fn cs -> [{:return, 0} | cs] end
+
+                 :return <- :return_value | :empty_return
 
                  :handler_id <- :command_name | :message_name | :id
 
-                 :handler_name <-
-                   str(:handler_id) *
-                     fn [name | cs] -> [{:handler_name, name} | cs] end
+                 :handler_name <- str(:handler_id)
 
                  :pass <-
                    "pass" * Sp * :handler_name *
-                     fn [{:handler_name, name} | cs] -> [{:pass, name} | cs] end
+                     fn [name | cs] -> [{:pass, 0, name} | cs] end
 
                  :exit_to_hypercard <-
                    "to" * Sp * ("HyperCard" | "hypercard") *
-                     fn cs -> [:exit_to_hypercard | cs] end
+                     fn cs -> [{:exit_to_hypercard, 0} | cs] end
 
-                 :exit_repeat <- "repeat" * fn cs -> [:exit_repeat | cs] end
+                 :exit_repeat <- "repeat" * fn cs -> [{:exit_repeat, 0} | cs] end
 
                  :exit_handler <-
                    :handler_name *
-                     fn [{:handler_name, name} | cs] -> [{:exit_handler, name} | cs] end
+                     fn [name | cs] -> [{:exit_handler, 0, name} | cs] end
 
                  :exit <- "exit" * Sp * (:exit_to_hypercard | :exit_repeat | :exit_handler)
 
                  :end_if <- "end" * Sp * "if"
-                 :else_single <- Sp * :statement * opt(+Nl * :+ * :end_if)
-                 :else_multi <- +Nl * :+ * opt(:statement_list) * :+ * :end_if
-                 :else <- "else" * (:else_single | :else_multi)
+
+                 :else_single <-
+                   Sp * :statement * opt(+Nl * :+ * :end_if) *
+                     fn cs ->
+                       cs = [{:else_single, 0} | cs]
+                       IO.inspect(cs, label: :after_else_single)
+                       cs
+                     end
+
+                 :else_multi <-
+                   +Nl * :+ * opt(:statement_list) * :+ * :end_if *
+                     fn cs ->
+                       cs = [{:else_multi, 0} | cs]
+                       IO.inspect(cs, label: :after_else_multi)
+                       cs
+                     end
+
+                 :else <-
+                   "else" * (:else_single | :else_multi)
 
                  :then_multiline <-
-                   +Nl * :+ * :statement_list * star(Nl) * :+ * (:else | :end_if)
+                   +Nl * :+ * :statement_list * star(Nl) * :+ * (:else | :end_if) *
+                     fn cs ->
+                       cs = [{:then_multi, 0} | cs]
+                       IO.inspect(cs, label: :after_then_multi)
+                       cs
+                     end
 
-                 :then_single_line <- Sp * :statement * opt(Nl) * :+ * opt(:else)
+                 :then_single_line <-
+                   Sp * :statement * opt(Nl) * :+ * opt(:else) *
+                     fn cs ->
+                       cs = [{:then_single, 0} | cs]
+                       IO.inspect(cs, label: :after_then_single)
+                       cs
+                     end
+
                  :then <- "then" * (:then_multiline | :then_single_line)
 
-                 :if <-
-                   "if" * Sp * :expr * opt(Nl) * :+ * :then *
+                 :if_cond <-
+                   "if" * Sp * :expr *
                      fn cs ->
-                       {stmnts, [test | rest]} =
-                         Kernel.apply(Hyperex.Grammar.Helpers, :collect_tuples, [
-                           cs,
-                           [in: [:statement, :statement_list]]
-                         ])
+                       cs = [{:if_cond, 1} | cs]
+                       IO.inspect(cs, label: :after_if_cond)
+                       cs
+                     end
 
-                       case stmnts do
-                         [{:statement, if_path}] ->
-                           [{:if, test, [if_path], []} | rest]
+                 :if <-
+                   :if_cond * opt(Nl) * :+ * :then *
+                     fn cs ->
+                       {n, expr, rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :collect_tuples, [cs, []])
 
-                         [{:statement_list, if_path}] ->
-                           [{:if, test, if_path, []} | rest]
+                       IO.puts("if #{n} #{inspect(expr)} rest #{inspect(rest)}")
+                       cs
+                       # [test | rest] = rest
 
-                         [{:statement, else_path}, {:statement, if_path}] ->
-                           [{:if, test, [if_path], [else_path]} | rest]
+                       # case stmnts do
+                       #  [{:statement, n}, if_path] ->
+                       #    [{:if_then, 1}, test | rest]
 
-                         [{:statement_list, else_path}, {:statement_list, if_path}] ->
-                           [{:if, test, if_path, else_path} | rest]
-                       end
+                       #  [{:statement_list, n}, if_path] ->
+                       #    [{:if_then, 1}, test | rest]
+
+                       # [{:statement, n}, else_path, {:statement, 0, if_path}] ->
+                       #   [{:if_then_else, 2}, test, if_path, else_path | rest]
+
+                       # [{:statement_list, n}, else_path, {:statement_list, if_path}] ->
+                       #   [{:if_then_else, 2}, test, if_path, else_path | rest]
+                       # end
                      end
 
                  :repeat_until <-
                    "until" * Sp * :expr *
-                     fn [ex | cs] -> [{:repeat_until, [], ex} | cs] end
+                     fn cs ->
+                       {[ex], rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :chunk_captures, [cs, 1])
+
+                       [{:repeat_until, 1} | ex ++ rest]
+                     end
 
                  :repeat_while <-
                    "while" * Sp * :expr *
-                     fn [ex | cs] -> [{:repeat_while, [], ex} | cs] end
+                     fn cs ->
+                       {[ex], rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :chunk_captures, [cs, 1])
+
+                       [{:repeat_while, 1} | ex ++ rest]
+                     end
+
+                 :repeat_with <- "with" * Sp * str(:id) * :+ * "=" * :+ * :expr
 
                  :repeat_with_desc <-
-                   str(:id) * :+ * "=" * :+ * :expr * :+ * "down" * Sp * "to" * Sp *
-                     :expr *
-                     fn [to, from, var | cs] -> [{:repeat_with_desc, [], var, from, to} | cs] end
+                   :repeat_with * :+ * "down" * Sp * "to" * Sp * :expr *
+                     fn cs ->
+                       {[to, from], [var | rest]} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :chunk_captures, [cs, 2])
+
+                       [{:repeat_with_desc, 2, var}, from, to | rest]
+                     end
 
                  :repeat_with_asc <-
-                   str(:id) * :+ * "=" * :+ * :expr * :+ * "to" * Sp * :expr *
-                     fn [to, from, var | cs] -> [{:repeat_with_asc, [], var, from, to} | cs] end
+                   :repeat_with * :+ * "to" * Sp * :expr *
+                     fn cs ->
+                       # Extra var and expr put on the captures becuase :repeat_with_desc is
+                       # tried first
+                       IO.inspect(cs, label: :repeat_with_asc)
 
-                 :repeat_with <- "with" * Sp * (:repeat_with_desc | :repeat_with_asc)
+                       {[to, from], [var | _rest]} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :chunk_captures, [cs, 2])
 
-                 :repeat_forever <- "forever" * fn cs -> [{:repeat_forever, []} | cs] end
+                       [{:repeat_with_asc, 2, var}, from, to]
+                     end
+
+                 :repeat_forever <-
+                   "forever" *
+                     fn cs ->
+                       [{:repeat_forever, 0} | cs]
+                     end
 
                  :repeat_count <-
                    opt("for" * Sp) * :+ * :expr * :+ * opt("times") *
-                     fn [ex | cs] -> [{:repeat_count, [], ex} | cs] end
+                     fn cs ->
+                       {[ex], rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :chunk_captures, [cs, 1])
+
+                       [{:repeat_count, 1} | ex ++ rest]
+                     end
 
                  :repeat_range <-
-                   :repeat_until
+                   :repeat_with_desc
+                   | :repeat_with_asc
+                   | :repeat_until
                    | :repeat_while
-                   | :repeat_with
                    | :repeat_forever
                    | :repeat_count
 
-                 :repeat <-
-                   "repeat" * Sp * :repeat_range * +Nl * :+ * :statement_list * :+ *
-                     "end" * Sp * "repeat" *
-                     fn [{:statement_list, stmnts}, rep | cs] ->
-                       rep =
-                         case rep do
-                           {:repeat_until, _, ex} ->
-                             {:repeat_until, stmnts, ex}
+                 :repeat_body <-
+                   :statement_list *
+                     fn cs ->
+                       {n, [repeat | tups], rest} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :collect_tuples, [cs, []])
 
-                           {:repeat_while, _, ex} ->
-                             {:repeat_while, stmnts, ex}
+                       IO.puts(
+                         "in repeat_body, repeat #{inspect(repeat)} tups #{inspect(tups)} rest #{inspect(rest)}"
+                       )
 
-                           {:repeat_with_desc, _, var, from, to} ->
-                             {:repeat_with_desc, stmnts, var, from, to}
-
-                           {:repeat_with_asc, _, var, from, to} ->
-                             {:repeat_with_asc, stmnts, var, from, to}
-
-                           {:repeat_forever, _} ->
-                             {:repeat_forever, stmnts}
-
-                           {:repeat_count, _, ex} ->
-                             {:repeat_count, stmnts, ex}
+                       repeat_with_body_count =
+                         case repeat do
+                           {:repeat_until, _} -> {:repeat_until, n}
+                           {:repeat_while, _} -> {:repeat_while, n}
+                           {:repeat_with_desc, _, var} -> {:repeat_with_desc, n + 1, var}
+                           {:repeat_with_asc, _, var} -> {:repeat_with_asc, n + 1, var}
+                           {:repeat_forever, _} -> {:repeat_forever, n - 1}
+                           {:repeat_count, _} -> {:repeat_count, n}
                          end
 
-                       [rep | cs]
+                       cs = [repeat_with_body_count | tups ++ rest]
+                       IO.inspect(cs, label: :after_repeat_body)
+                       cs
                      end
+
+                 :repeat <-
+                   "repeat" * Sp * :repeat_range * +Nl * :+ * :repeat_body * :+ *
+                     "end" * Sp * "repeat"
 
                  ### Commands
                  :command <- :arg_command | :zero_arg_command
@@ -1033,11 +1112,11 @@ defmodule Hyperex.Grammar do
 
                  :arg_command <-
                    str(:zero_or_arg_command_name | :arg_command_name) * Sp * str(WordsToEol) *
-                     fn [args, name | cs] -> [{:command, name, args} | cs] end
+                     fn [args, name | cs] -> [{:command, 0, name, args} | cs] end
 
                  :zero_arg_command <-
                    str(:zero_or_arg_command_name | :zero_arg_command_name) *
-                     fn [name | cs] -> [{:command, name, ""} | cs] end
+                     fn [name | cs] -> [{:command, 0, name, ""} | cs] end
 
                  :the_formatted_func <-
                    "the" * opt(Sp * :adjective) * Sp * str(:date_time_func_name | "target") *
@@ -1050,51 +1129,59 @@ defmodule Hyperex.Grammar do
                          end
 
                        case cs do
-                         [{:format, _} = fmt | rest] ->
-                           [{:function_call, name, [], [fmt]} | rest]
+                         [{:format, _, fmt} | rest] ->
+                           [{:function_call, 0, name, [format: fmt]} | rest]
 
                          _ ->
-                           [{:function_call, name, [], []} | cs]
+                           [{:function_call, 0, name, []} | cs]
                        end
                      end
 
-                 :target_func <- "target" * fn cs -> [{:function_call, "target", [], []} | cs] end
+                 :target_func <- "target" * fn cs -> [{:function_call, 0, "target", []} | cs] end
 
                  :number_func <-
                    opt("the" * Sp) * "number" * Sp * "of" * Sp * str(WordsToEol) *
-                     fn [obj | cs] -> [{:function_call, "number", [obj], []} | cs] end
+                     fn [obj | cs] ->
+                       [{:function_call, 1, "number", []}, {:number_args, 0, obj} | cs]
+                     end
 
                  :zero_arg_func <-
                    str(:zero_arg_func_name) *
-                     fn [name | cs] -> [{:function_call, name, [], []} | cs] end
+                     fn [name | cs] -> [{:function_call, 0, name, []} | cs] end
 
-                 :single_arg_func <-
-                   str(:single_arg_func_name) *
-                     fn [name | cs] -> [{:function_call, name, [], []} | cs] end
+                 :single_arg_func <- str(:single_arg_func_name)
 
                  :the_single_arg_func_of <-
                    "the" * Sp * :single_arg_func * Sp * "of" * Sp * :expr *
-                     fn [ex, {:function_call, name, _, opts} | cs] ->
-                       [{:function_call, name, [ex], opts} | cs]
+                     fn cs ->
+                       {[ex], [name | rest]} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :chunk_captures, [cs, 1])
+
+                       [{:function_call, 1, name, []}, ex ++ rest]
                      end
 
                  :single_arg_func_parens <-
                    :single_arg_func * :+ * "(" * :+ * :expr * :+ * ")" *
-                     fn [ex, {:function_call, name, _, opts} | cs] ->
-                       [{:function_call, name, [ex], opts} | cs]
+                     fn cs ->
+                       {[ex], [name | rest]} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :chunk_captures, [cs, 1])
+
+                       [{:function_call, 1, name, []}, ex ++ rest]
                      end
 
                  :list_arg_func <-
                    str(:two_arg_func_name | :list_arg_func_name) * :+ *
                      "(" * :+ * :expr_list * :+ * ")" *
                      fn cs ->
-                       {exlist, [name | rest]} =
+                       IO.inspect(cs, label: :list_arg_func)
+
+                       {n, exlist, [name | rest]} =
                          Kernel.apply(Hyperex.Grammar.Helpers, :collect_tuples, [
                            cs,
                            [reverse: true]
                          ])
 
-                       [{:function_call, name, exlist, []} | rest]
+                       [{:function_call, n, name, []}, exlist ++ rest]
                      end
 
                  :built_in_func <-
@@ -1110,16 +1197,16 @@ defmodule Hyperex.Grammar do
                  :user_func <-
                    str(:id) * :+ * "(" * :+ * opt(:expr_list) * :+ * ")" *
                      fn cs ->
-                       {exlist, [name | rest]} =
+                       {n, exlist, [name | rest]} =
                          Kernel.apply(Hyperex.Grammar.Helpers, :collect_tuples, [
                            cs,
                            [reverse: true]
                          ])
 
-                       [{:function_call, name, exlist, [user_defined: true]} | rest]
+                       [{:function_call, n, name, [user_defined: true]}, exlist ++ rest]
                      end
 
-                 :param <- str(:id) * fn [v | cs] -> [{:param, v} | cs] end
+                 :param <- str(:id) * fn [v | cs] -> [{:param, 0, v} | cs] end
 
                  :end_handler <- "end" * Sp * :handler_id
 
@@ -1127,46 +1214,40 @@ defmodule Hyperex.Grammar do
                    "on" * Sp * :handler_name * opt(:+ * :parameter_list) * +Nl *
                      :+ * opt(:statement_list) * :+ * :end_handler *
                      fn cs ->
-                       {handler, rest} =
+                       {n_stmnts, stmnts, rest} =
                          Kernel.apply(Hyperex.Grammar.Helpers, :collect_tuples, [
                            cs,
-                           [in: [:params, :statement_list, :handler_name]]
+                           [in: :statement]
                          ])
 
-                       {name, params, stmnts} =
-                         Enum.reduce(handler, {"", [], []}, fn elem, {n, p, s} ->
-                           case elem do
-                             {:handler_name, name} -> {name, p, s}
-                             {:params, params} -> {n, params, s}
-                             {:statement_list, statement_list} -> {n, p, statement_list}
-                           end
-                         end)
+                       {n_params, params, [name | rest]} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :collect_tuples, [
+                           rest,
+                           [in: :params]
+                         ])
 
-                       [{:handler, name, params, stmnts} | rest]
+                       [{:handler, n_params + n_stmnts, name} | params ++ stmnts ++ rest]
                      end
 
-                 :function_name <- str(:id) * fn [name | cs] -> [{:function_name, name} | cs] end
+                 :function_name <- str(:id)
 
                  :function_def <-
                    "function" * Sp * :function_name * :+ * opt(:parameter_list) * +Nl * :+ *
                      opt(:statement_list) * :+ * "end" * Sp * :id *
                      fn cs ->
-                       {function, rest} =
+                       {n_stmnts, stmnts, rest} =
                          Kernel.apply(Hyperex.Grammar.Helpers, :collect_tuples, [
                            cs,
-                           [in: [:params, :statement_list, :function_name]]
+                           [in: :statement]
                          ])
 
-                       {name, params, stmnts} =
-                         Enum.reduce(function, {"", [], []}, fn elem, {n, p, s} ->
-                           case elem do
-                             {:function_name, name} -> {name, p, s}
-                             {:params, params} -> {n, params, s}
-                             {:statement_list, statement_list} -> {n, p, statement_list}
-                           end
-                         end)
+                       {n_params, params, [name | rest]} =
+                         Kernel.apply(Hyperex.Grammar.Helpers, :collect_tuples, [
+                           rest,
+                           [in: :params]
+                         ])
 
-                       [{:function, name, params, stmnts} | rest]
+                       [{:function, n_params + n_stmnts, name} | params ++ stmnts ++ rest]
                      end
 
                  ## HyperTalk vocabulary
@@ -1993,7 +2074,7 @@ defmodule Hyperex.Grammar do
                      | "linefeed"
                      | "comma"
                      | "colon"
-                   ) * fn [v | cs] -> [{:constant, v} | cs] end
+                   ) * fn [v | cs] -> [{:constant, 0, v} | cs] end
 
                  :true_false <- "true" | "false"
                  :of <- "of" | "in"
